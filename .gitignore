@@ -1,0 +1,24 @@
+# ignore any shell scripts
+
+*.sh
+
+
+# ignore data directories and their files
+
+data/*
+figs/*
+Skript_Plötz/
+
+#ignore misc files
+
+Warteschlangenmodell.xlsx
+*.png
+.DS_Store
+.RData
+.Rhistory
+.ipynb_checkpoints
+.idea
+
+# ignore environment folder from pycharm
+.venv
+venv/
