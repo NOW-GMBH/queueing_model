@@ -17,7 +17,23 @@ def queue_mgc_coop(mean_waiting_time, server, mu, charging_time, vk, wq_mgc=50, 
     return [lambda_0, roh, wq * 60, wq_mgc * 60, wz_az]
 
 
-def queue_mgc_Adan_Resing(mean_waiting_time, server, mu, charging_time, vk, wq_mgc=50, roh_0=0.99):
+def queue_mgc_Adan_Resing_old(mean_waiting_time, server, mu, charging_time, vk, wq_mgc=50, roh_0=0.99):
+    """
+    Warteschlangenmodell im M/G/c-System nach Adan & Resing (2017)
+
+    Approximierung nach Funke 2018 - https://urn.fi/urn:nbn:de:hebis:34-2018041155288 ⎘
+
+    Jedoch falsche Implementierung wq_part2 ist die Summenberechung falsch, sie summiert fälschlicherweise auch den letzten
+    Term mit und der Range ist um -1 zu kurz
+    :param mean_waiting_time:
+    :param server:
+    :param mu:
+    :param charging_time:
+    :param vk:
+    :param wq_mgc:
+    :param roh_0:
+    :return:
+    """
     # Adan_Resing
     lambda_0 = roh_0 * (server * mu)
 
@@ -41,9 +57,99 @@ def queue_mgc_Adan_Resing(mean_waiting_time, server, mu, charging_time, vk, wq_m
 
     return [lambda_0, roh, wq * 60, wq_mgc * 60, wz_az]
 
+def queue_mgc_Adan_Resing(mean_waiting_time, server, mu, charging_time, vk, wq_mgc=50, roh_0=0.99):
+    """
+
+    Calculates the maximum arrival rate for a queueing model using the M/G/c system on the basis of the Adan & Resing (2017)
+    and Funke (2018) approoximation.
+
+    Funke (2018) - https://urn.fi/urn:nbn:de:hebis:34-2018041155288
+
+    The function iteratively adjusts the arrival rate (lambda) until the mean waiting time in the queue meets or exceeds the target.
+    It uses an approximation method based on Erlang-C formula and adapts it for multiple servers.
+
+    Parameters:
+    - mean_waiting_time: Target average waiting time in minutes
+    - server: Number of servers available
+    - mu: Service rate per server (1 / charging_time)
+    - charging_time: Average service time per unit of the system
+    - vk: Variations coefficient (standard deviation divided by mean value)
+    - wq_mgc: Initial guess for the average waiting time in minutes
+    - roh_0: Initial guess for the utilization
+
+    Returns:
+    - List containing adjusted lambda, utilization (roh), average waiting time in minutes, and other statistics.
+    """
+    # --- GEGEBENE GRUNDWERTE ---
+    # lambda_0 = roh_0 * (server * mu)
+    # wird unten dynamisch angepasst
+    # mean_waiting_time in Minuten
+    # charging_time = durchschnittliche Bedienzeit (z. B. 0.5 Stunden = 30 Min)
+    # mu = 1 / charging_time
+    # vk = Variationskoeffizient (Standardabweichung / Mittelwert)
+
+    # ----------------------------------------------
+    # START DER ITERATION
+    # ----------------------------------------------
+
+    lambda_0 = roh_0 * (server * mu)
+
+    # Schleife: reduziere λ, bis Wartezeit ≤ Ziel
+    while wq_mgc > mean_waiting_time / 60:  # mean_waiting_time in Minuten → /60 = Stunden
+        lambda_0 -= 0.0001  # Reduzierung der Ankunftsrate
+
+        roh = lambda_0 / (server * mu)
+
+        if roh >= 1:
+            # System instabil → überspringen
+            continue
+
+        # ----------------------------------------------
+        # M/M/c-Formel nach Adan & Resing (2017)
+        # ----------------------------------------------
+        if server > 1:
+            cr = server * roh  # Hilfsgröße
+
+            # Summe: ∑_{n=0}^{c-1} (cρ)^n / n!
+            sum_terms = sum((cr ** n) / math.factorial(n) for n in range(0, server))
+
+            # Letzter Term: (cρ)^c / c!
+            last_term = (cr ** server) / math.factorial(server)
+
+            # Denominator gemäß Paper:
+            denom = (1 - roh) * sum_terms + last_term
+
+            # Erlang-C-Wahrscheinlichkeit (P_wait)
+            P_wait = last_term / denom
+
+            # M/M/c mittlere Wartezeit Wq_MM_c
+            wq = P_wait / (server * mu * (1 - roh))
+
+        # ----------------------------------------------
+        # Spezialfall: nur 1 Server → M/G/1 (Pollaczek–Khinchine)
+        # ----------------------------------------------
+        else:
+            E_S = charging_time  # mittlere Bedienzeit
+            E_S2 = E_S ** 2 * (1 + vk ** 2)  # zweites Moment über cv
+            wq = (lambda_0 * E_S2) / (2 * (1 - roh))  # exakte PK-Formel
+
+        # ----------------------------------------------
+        # M/G/c-Approximation nach Funke (2018):
+        # Wq_MGc = ((1 + C^2)/2) * Wq_MM_c
+        # ----------------------------------------------
+        if server > 1:
+            wq_mgc = wq * ((1 + vk ** 2) / 2)
+        else:
+            wq_mgc = wq  # bei M/G/1 schon exakte PK-Formel
+
+        # Verhältnis Wartezeit zu Servicezeit
+        wz_az = wq_mgc / charging_time
+
+    return [lambda_0, roh, wq * 60, wq_mgc * 60, wz_az]
+
 
 def que_mgc(charging_time, stdev_ct, mean_waiting_time, max_server, method):
-    dict_method = {'coop': queue_mgc_coop, 'adan': queue_mgc_Adan_Resing}
+    dict_method = {'coop': queue_mgc_coop, 'adan': queue_mgc_Adan_Resing, 'adan_fix': queue_mgc_Adan_Resing_fix}
     method = dict_method[method]
 
     charging_time = charging_time / 60
