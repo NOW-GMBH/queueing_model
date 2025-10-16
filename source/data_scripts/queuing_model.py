@@ -3,8 +3,29 @@ import numpy as np
 import math
 
 
-def queue_mgc_coop(mean_waiting_time, server, mu, charging_time, vk, wq_mgc=50, roh_0=0.99):
-    # After Coop 1990 - S.508 - Formel 9.3
+def queue_mgc_coop(mean_waiting_time: float, server: int, mu: float, charging_time: float, vk: float,
+                   wq_mgc:float=50, roh_0:float=0.99)->list:
+    """
+    Approximate M/G/c queueing model based on Cooper (1990, p.508, Eq. 9.3).
+
+    Iteratively determines the maximum arrival rate (λ₀) for a multi-server queue
+    such that the mean waiting time does not exceed a target value.
+    The method uses Cooper’s simplified approximation for M/M/c systems and
+    extends it to M/G/c by applying a correction factor based on the coefficient
+    of variation of service times (vₖ).
+
+    :param mean_waiting_time: Target mean waiting time in minutes.
+    :param server: Number of parallel servers (charging points).
+    :param mu: Mean service rate per server [1/hour].
+    :param charging_time: Average service (charging) time per customer in hours.
+    :param vk: Coefficient of variation of service times (standard deviation / mean).
+    :param wq_mgc: Initial waiting time guess (in hours). Default is 50.
+    :param roh_0: Initial utilization factor (ρ₀), default is 0.99.
+    :return:  list
+        [λ₀ (1/h), ρ, Wq_MM_c (min), Wq_MG_c (min), Wq/ServiceTime ratio]
+    """
+
+    # After Cooper 1990 - S.508 - Formel 9.3
     lambda_0 = roh_0 * (server * mu)
 
     while (wq_mgc > mean_waiting_time / 60):
@@ -57,7 +78,8 @@ def queue_mgc_Adan_Resing_old(mean_waiting_time, server, mu, charging_time, vk, 
 
     return [lambda_0, roh, wq * 60, wq_mgc * 60, wz_az]
 
-def queue_mgc_Adan_Resing(mean_waiting_time, server, mu, charging_time, vk, wq_mgc=50, roh_0=0.99):
+def queue_mgc_Adan_Resing(mean_waiting_time: float, server: int, mu: float, charging_time: float, vk: float,
+                          wq_mgc:float=50, roh_0:float=0.99)->list:
     """
 
     Calculates the maximum arrival rate for a queueing model using the M/G/c system on the basis of the Adan & Resing (2017)
@@ -148,8 +170,26 @@ def queue_mgc_Adan_Resing(mean_waiting_time, server, mu, charging_time, vk, wq_m
     return [lambda_0, roh, wq * 60, wq_mgc * 60, wz_az]
 
 
-def que_mgc(charging_time, stdev_ct, mean_waiting_time, max_server, method):
-    dict_method = {'coop': queue_mgc_coop, 'adan': queue_mgc_Adan_Resing, 'adan_fix': queue_mgc_Adan_Resing_fix}
+def que_mgc(charging_time: int, stdev_ct, mean_waiting_time, max_server, method):
+    """
+    Calculates the maximum arrival rate for various server counts in a queueing model using different methods.
+
+    This function iterates through a range of server counts and calculates the optimal arrival rate (lambda), traffic intensity (roh),
+    average waiting time (wq), maximum queue length (wq_mgc), and other statistics based on the specified method.
+
+    Parameters:
+    - charging_time: Average service time in minutes
+    - stdev_ct: Standard deviation of the service time in minutes
+    - mean_waiting_time: Target average waiting time in minutes for the system
+    - max_server: Maximum number of servers to consider (default is 1000)
+    - method: Method to use for calculating maximum arrival rate ('coop', 'adan', or 'adan_old')
+
+    Returns:
+    - DataFrame containing the calculated parameters for each server count, including the number of servers,
+      lambda, roh, wq, wq_mgc, and wz/az.
+    """
+
+    dict_method = {'coop': queue_mgc_coop, 'adan': queue_mgc_Adan_Resing, 'adan_old': queue_mgc_Adan_Resing_old}
     method = dict_method[method]
 
     charging_time = charging_time / 60
@@ -168,7 +208,27 @@ def que_mgc(charging_time, stdev_ct, mean_waiting_time, max_server, method):
     return queue
 
 
-def que_mgc_server_wq(lambda_target, charging_time, stdev_ct, waiting_times, method, max_server=1000):
+def que_mgc_server_wq(lambda_target: float, charging_time: int, stdev_ct: int, waiting_times: list, method:str,
+                      max_server:int=1000)->tuple:
+    """
+        Determines the number of servers required to meet a target arrival rate for various mean waiting times.
+
+        This function iterates through different waiting times and calculates the optimal number of servers needed based on
+        the specified method (e.g., Cooper or Adan-Resing). It returns a dictionary mapping each waiting time to the
+        corresponding number of servers required to achieve an arrival rate less than or equal to the target.
+
+        Parameters:
+        - lambda_target: Target arrival rate (lambda) in units per hour
+        - charging_time: Average service time in minutes
+        - stdev_ct: Standard deviation of the service time in minutes
+        - waiting_times: List of mean waiting times in minutes for which the number of servers is to be determined
+        - method: Method to use for calculating optimal server count ('coop' or 'adan')
+        - max_server: Maximum number of servers to consider (default is 1000)
+
+        Returns:
+        - Tuple containing the target arrival rate and a dictionary mapping each mean waiting time to the corresponding number of servers.
+        """
+
     dict_method = {'coop': queue_mgc_coop, 'adan': queue_mgc_Adan_Resing}
     method = dict_method[method]
 
