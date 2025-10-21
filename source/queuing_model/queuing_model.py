@@ -170,7 +170,7 @@ def queue_mgc_Adan_Resing(mean_waiting_time: float, server: int, mu: float, char
     return [lambda_0, roh, wq * 60, wq_mgc * 60, wz_az]
 
 
-def que_mgc(charging_time: int, stdev_ct, mean_waiting_time, max_server, method):
+def que_mgc(charging_time: int, stdev_ct: int, mean_waiting_time: float, max_server: int, method):
     """
     Calculates the maximum arrival rate for various server counts in a queueing model using different methods.
 
@@ -197,7 +197,7 @@ def que_mgc(charging_time: int, stdev_ct, mean_waiting_time, max_server, method)
     mu = 1 / charging_time
     vk = stdev_ct / charging_time
 
-    queue = pd.DataFrame(0, index=list(range(1, max_server + 1)),
+    queue = pd.DataFrame(0.0, index=list(range(1, max_server + 1)),
                          columns=['servers', 'lambda', 'roh', 'wq', 'wq_mgc', 'wz/az'])
 
     for server in range(1, max_server + 1):
