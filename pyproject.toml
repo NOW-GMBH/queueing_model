@@ -5,7 +5,7 @@ description = "Scripts to apply queuing models"
 authors = ["Matthias Friebel <matthias.friebel@now-gmbh.de>"]
 readme = "README.md"
 packages = [
-  { include = "data_scripts", from = "source" }
+  { include = "queuing_model", from = "source" }
 ]
 
 [tool.poetry.dependencies]
