@@ -1,9 +1,12 @@
 [tool.poetry]
-name = "planen-queuing-model"
+name = "queuing-model"
 version = "0.1.0"
-description = ""
+description = "Scripts to apply queuing models"
 authors = ["Matthias Friebel <matthias.friebel@now-gmbh.de>"]
 readme = "README.md"
+packages = [
+  { include = "data_scripts", from = "source" }
+]
 
 [tool.poetry.dependencies]
 python = "^3.11"
