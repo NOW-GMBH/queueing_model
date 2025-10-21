@@ -23,3 +23,4 @@ Warteschlangenmodell.xlsx
 # ignore environment folder from pycharm
 .venv
 venv/
+__pycache__
