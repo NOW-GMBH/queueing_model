@@ -170,6 +170,26 @@ def queue_mgc_Adan_Resing(mean_waiting_time: float, server: int, mu: float, char
     return [lambda_0, roh, wq * 60, wq_mgc * 60, wz_az]
 
 
+def calculate_min_servers(lambda_, mu, max_mean_waiting_time, vk):
+    """Adan-Resing"""
+    c = 1
+    while True:
+        rho = lambda_ / (c * mu)
+        if rho >= 1:
+            c += 1
+            continue
+        cr = c * rho
+        sum_terms = sum((cr ** n) / math.factorial(n) for n in range(0, c))
+        last_term = (cr ** c) / math.factorial(c)
+        denom = (1 - rho) * sum_terms + last_term
+        P_wait = last_term / denom
+        wq_mm_c = P_wait / (c * mu * (1 - rho))
+        wq_mg_c = ((1 + vk ** 2) / 2) * wq_mm_c
+        if wq_mg_c <= max_mean_waiting_time:
+            return c, lambda_, rho, wq_mg_c * 60, wq_mm_c * 60,
+        c += 1
+
+
 def que_mgc(charging_time: int, stdev_ct: int, mean_waiting_time: float, max_server: int, method):
     """
     Calculates the maximum arrival rate for various server counts in a queueing model using different methods.
