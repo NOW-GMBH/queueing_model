@@ -249,7 +249,7 @@ def que_mgc_server_wq(lambda_target: float, charging_time: int, stdev_ct: int, w
         - Tuple containing the target arrival rate and a dictionary mapping each mean waiting time to the corresponding number of servers.
         """
 
-    dict_method = {'coop': queue_mgc_coop, 'adan': queue_mgc_Adan_Resing}
+    dict_method = {'coop': queue_mgc_coop, 'adan': queue_mgc_Adan_Resing, 'adan_old': queue_mgc_Adan_Resing_old}
     method = dict_method[method]
 
     dict_server_wq = {}
