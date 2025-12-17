@@ -1,7 +1,6 @@
 import pandas as pd
-import numpy as np
 import math
-
+from typing import List, Tuple
 
 def queue_mgc_coop(mean_waiting_time: float, server: int, mu: float, charging_time: float, vk: float,
                    wq_mgc:float=50, roh_0:float=0.99)->list:
@@ -132,11 +131,18 @@ def queue_mgc_Adan_Resing(mean_waiting_time: float, server: int, mu: float, char
         if server > 1:
             cr = server * roh  # Hilfsgröße
 
-            # Summe: ∑_{n=0}^{c-1} (cρ)^n / n!
-            sum_terms = sum((cr ** n) / math.factorial(n) for n in range(0, server))
+            term = 1.0
+            sum_terms = term
 
+            for n in range(1, server):
+                term *= cr / n
+                # Summe: ∑_{n=0}^{c-1} (cρ)^n / n!
+                sum_terms += term
+
+            # last_term = (cr^server)/server! → einfach weitere Iteration
+            term *= cr / server
             # Letzter Term: (cρ)^c / c!
-            last_term = (cr ** server) / math.factorial(server)
+            last_term = term
 
             # Denominator gemäß Paper:
             denom = (1 - roh) * sum_terms + last_term
@@ -166,7 +172,6 @@ def queue_mgc_Adan_Resing(mean_waiting_time: float, server: int, mu: float, char
 
         # Verhältnis Wartezeit zu Servicezeit
         wz_az = wq_mgc / charging_time
-
     return [lambda_0, roh, wq * 60, wq_mgc * 60, wz_az]
 
 
@@ -189,6 +194,173 @@ def calculate_min_servers(lambda_, mu, max_mean_waiting_time, vk):
             return c, lambda_, rho, wq_mg_c * 60, wq_mm_c * 60,
         c += 1
 
+
+def _logsumexp(values: List[float]) -> float:
+    """Numerisch stabile Berechnung von log(sum(exp(values)))."""
+    m = max(values)
+    if not math.isfinite(m):
+        return float('inf')
+    return m + math.log(sum(math.exp(v - m) for v in values))
+
+def _erlang_c_prob_wait(c: int, rho: float) -> float:
+    """
+    Numerisch stabile Berechnung der Erlang-C Wartwahrscheinlichkeit P_wait
+    für ein M/M/c-System.
+    Nutzt Logspace + lgamma zur Stabilisierung.
+    """
+    if c == 1:
+        return rho  # M/M/1-Spezialfall: P_wait = rho
+
+    if rho <= 0:
+        return 0.0
+    if rho >= 1:
+        return 1.0
+
+    cr = c * rho
+    log_cr = math.log(cr)
+
+    # log(a_n) = n*log(cr) - log(n!) für n = 0..c-1
+    log_a = [(n * log_cr) - math.lgamma(n + 1) for n in range(0, c)]
+    log_sum_terms = _logsumexp(log_a)
+
+    # log(a_c)
+    log_a_c = c * log_cr - math.lgamma(c + 1)
+
+    # ratio = ((1-rho)*sum_terms) / a_c  im Logspace
+    log_ratio = math.log1p(-rho) + log_sum_terms - log_a_c
+
+    # Stabilisierung gegen extreme Werte
+    if log_ratio > 700:   # exp(700) ~ 1e304
+        return 0.0
+    if log_ratio < -700:  # exp(-700) ~ 0
+        return 1.0
+
+    ratio = math.exp(log_ratio)
+    return 1.0 / (1.0 + ratio)
+
+
+def _compute_wq_for_lambda(
+    lmbda: float,
+    c: int,
+    mu: float,
+    charging_time_min: float,
+    vk: float
+) -> Tuple[float, float, float]:
+    """
+    Berechne roh, Wq_MM_c (in Minuten) und Wq_MGc (in Minuten)
+    für eine gegebene Ankunftsrate λ.
+
+    charging_time_min: Bedienzeit *in Minuten*
+    mu: Service rate pro Server = 1 / (charging_time_in_hours)
+    """
+    # Umrechnung in Stunden für interne Formeln
+    charging_time_hr = charging_time_min / 60.0
+
+    if lmbda <= 0:
+        return 0.0, 0.0, 0.0
+
+    roh = lmbda / (c * mu)
+
+    if roh >= 1.0:
+        return roh, float('inf'), float('inf')
+
+    # -----------------------------
+    # M/G/1 Fall
+    # -----------------------------
+    if c == 1:
+        E_S = charging_time_hr
+        E_S2 = E_S * E_S * (1 + vk * vk)
+        wq_hours = (lmbda * E_S2) / (2 * (1 - roh))
+        wq_mgc_hours = wq_hours
+        return roh, wq_hours * 60, wq_mgc_hours * 60  # in Minuten
+
+    # -----------------------------
+    # M/M/c Basis
+    # -----------------------------
+    P_wait = _erlang_c_prob_wait(c, roh)
+    denom = c * mu * (1 - roh)
+    wq_hours = P_wait / denom
+
+    # -----------------------------
+    # M/G/c (Funke) Approximation
+    # -----------------------------
+    wq_mgc_hours = wq_hours * ((1 + vk * vk) / 2.0)
+
+    return roh, wq_hours * 60, wq_mgc_hours * 60  # alles in Minuten
+
+
+def queue_mgc_Adan_Resing_stable(
+    mean_waiting_time: float,
+    server: int,
+    charging_time_min: float,
+    vk: float,
+    roh_start: float = 0.99,
+    tol_minutes: float = 1e-3,
+    max_iter: int = 80
+) -> List[float]:
+    """
+    Stabil berechnete maximale Ankunftsrate lambda für eine Zielwartezeit
+    (mean_waiting_time in Minuten).
+
+    Parameter:
+    - mean_waiting_time (Min)
+    - server = c (Anzahl Server)
+    - charging_time_min (Min!)
+    - vk = Variationskoeffizient
+
+    Rückgabe:
+    [lambda, roh, Wq_MM_c_min, Wq_MGc_min, wz_az]
+    """
+    # Service rate pro Server in 1/Stunde
+    mu = 1.0 / (charging_time_min / 60.0)
+
+    target_wq_min = mean_waiting_time
+    target_wq_hr = mean_waiting_time / 60.0
+
+    # Obergrenze für λ: systemstabil knapp unter c*mu
+    lambda_high = server * mu * 0.999999
+    lambda_low = 0.0
+
+    best_lambda = 0.0
+    best_roh = 0.0
+    best_wq_min = 0.0
+    best_wq_mgc_min = 0.0
+
+    for _ in range(max_iter):
+        mid = 0.5 * (lambda_low + lambda_high)
+
+        roh, wq_min, wq_mgc_min = _compute_wq_for_lambda(
+            mid, server, mu, charging_time_min, vk
+        )
+
+        if not math.isfinite(wq_mgc_min):
+            lambda_high = mid
+            continue
+
+        if wq_mgc_min <= target_wq_min:
+            best_lambda = mid
+            best_roh = roh
+            best_wq_min = wq_min
+            best_wq_mgc_min = wq_mgc_min
+            lambda_low = mid
+        else:
+            lambda_high = mid
+
+        if abs(wq_mgc_min - target_wq_min) < tol_minutes:
+            break
+        if lambda_high - lambda_low < 1e-12:
+            break
+
+    # Verhältnis Warten/Bedienen
+    wz_az = best_wq_mgc_min / charging_time_min
+
+    return [
+        best_lambda,
+        best_roh,
+        best_wq_min,
+        best_wq_mgc_min,
+        wz_az
+    ]
 
 def que_mgc(charging_time: int, stdev_ct: int, mean_waiting_time: float, max_server: int, method):
     """
