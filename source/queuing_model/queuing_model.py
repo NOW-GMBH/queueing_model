@@ -243,7 +243,7 @@ def _compute_wq_for_lambda(
     lmbda: float,
     c: int,
     mu: float,
-    charging_time_min: float,
+    charging_time: float,
     vk: float
 ) -> Tuple[float, float, float]:
     """
@@ -253,8 +253,6 @@ def _compute_wq_for_lambda(
     charging_time_min: Bedienzeit *in Minuten*
     mu: Service rate pro Server = 1 / (charging_time_in_hours)
     """
-    # Umrechnung in Stunden für interne Formeln
-    charging_time_hr = charging_time_min / 60.0
 
     if lmbda <= 0:
         return 0.0, 0.0, 0.0
@@ -268,7 +266,7 @@ def _compute_wq_for_lambda(
     # M/G/1 Fall
     # -----------------------------
     if c == 1:
-        E_S = charging_time_hr
+        E_S = charging_time
         E_S2 = E_S * E_S * (1 + vk * vk)
         wq_hours = (lmbda * E_S2) / (2 * (1 - roh))
         wq_mgc_hours = wq_hours
@@ -288,14 +286,14 @@ def _compute_wq_for_lambda(
 
     return roh, wq_hours * 60, wq_mgc_hours * 60  # alles in Minuten
 
-
 def queue_mgc_Adan_Resing_stable(
     mean_waiting_time: float,
     server: int,
-    charging_time_min: float,
+    mu: float,
+    charging_time: float,
     vk: float,
-    roh_start: float = 0.99,
-    tol_minutes: float = 1e-3,
+    roh_start: float = 0.999999,
+    tol_minutes: float = 1e-5,
     max_iter: int = 80
 ) -> List[float]:
     """
@@ -311,14 +309,12 @@ def queue_mgc_Adan_Resing_stable(
     Rückgabe:
     [lambda, roh, Wq_MM_c_min, Wq_MGc_min, wz_az]
     """
-    # Service rate pro Server in 1/Stunde
-    mu = 1.0 / (charging_time_min / 60.0)
 
     target_wq_min = mean_waiting_time
     target_wq_hr = mean_waiting_time / 60.0
 
     # Obergrenze für λ: systemstabil knapp unter c*mu
-    lambda_high = server * mu * 0.999999
+    lambda_high = server * mu * roh_start
     lambda_low = 0.0
 
     best_lambda = 0.0
@@ -330,7 +326,7 @@ def queue_mgc_Adan_Resing_stable(
         mid = 0.5 * (lambda_low + lambda_high)
 
         roh, wq_min, wq_mgc_min = _compute_wq_for_lambda(
-            mid, server, mu, charging_time_min, vk
+            mid, server, mu, charging_time, vk
         )
 
         if not math.isfinite(wq_mgc_min):
@@ -352,7 +348,7 @@ def queue_mgc_Adan_Resing_stable(
             break
 
     # Verhältnis Warten/Bedienen
-    wz_az = best_wq_mgc_min / charging_time_min
+    wz_az = best_wq_mgc_min / (charging_time/60)
 
     return [
         best_lambda,
@@ -381,7 +377,8 @@ def que_mgc(charging_time: int, stdev_ct: int, mean_waiting_time: float, max_ser
       lambda, roh, wq, wq_mgc, and wz/az.
     """
 
-    dict_method = {'coop': queue_mgc_coop, 'adan': queue_mgc_Adan_Resing, 'adan_old': queue_mgc_Adan_Resing_old}
+    dict_method = {'coop': queue_mgc_coop, 'adan': queue_mgc_Adan_Resing, 'adan_old': queue_mgc_Adan_Resing_old,
+                   'adan_stable': queue_mgc_Adan_Resing_stable}
     method = dict_method[method]
 
     charging_time = charging_time / 60
@@ -421,7 +418,8 @@ def que_mgc_server_wq(lambda_target: float, charging_time: int, stdev_ct: int, w
         - Tuple containing the target arrival rate and a dictionary mapping each mean waiting time to the corresponding number of servers.
         """
 
-    dict_method = {'coop': queue_mgc_coop, 'adan': queue_mgc_Adan_Resing, 'adan_old': queue_mgc_Adan_Resing_old}
+    dict_method = {'coop': queue_mgc_coop, 'adan': queue_mgc_Adan_Resing, 'adan_old': queue_mgc_Adan_Resing_old,
+                   'adan_stable': queue_mgc_Adan_Resing_stable}
     method = dict_method[method]
 
     dict_server_wq = {}
@@ -468,3 +466,76 @@ def queue_wq_roh_coop(roh_range, server, charging_time, stdev_ct):
                                  'krit_wert']] = lambda_value, server, roh, wq * 60, wq_mgc * 60, wz_az, lambda_value / server
 
     return queue.astype('float')
+
+
+def qed_servers(lambda_rate, mu, beta=1.0):
+    """
+    QED (Halfin–Whitt) square-root staffing rule
+    """
+    R = lambda_rate / mu
+    return math.ceil(R + beta * math.sqrt(R))
+
+def que_mgc_server_wq_qed(lambda_target: float, charging_time: int, stdev_ct: int, waiting_times: list, method:str,
+                          beta=1.0, search_radius=10, max_server:int=1000)->tuple:
+    """
+        Determines the number of servers required to meet a target arrival rate for various mean waiting times.
+
+        This function iterates through different waiting times and calculates the optimal number of servers needed based on
+        the specified method (e.g., Cooper or Adan-Resing). It returns a dictionary mapping each waiting time to the
+        corresponding number of servers required to achieve an arrival rate less than or equal to the target.
+
+        Parameters:
+        - lambda_target: Target arrival rate (lambda) in units per hour
+        - charging_time: Average service time in minutes
+        - stdev_ct: Standard deviation of the service time in minutes
+        - waiting_times: List of mean waiting times in minutes for which the number of servers is to be determined
+        - method: Method to use for calculating optimal server count ('coop' or 'adan')
+        - max_server: Maximum number of servers to consider (default is 1000)
+
+        Returns:
+        - Tuple containing the target arrival rate and a dictionary mapping each mean waiting time to the corresponding number of servers.
+        """
+
+    dict_method = {'coop': queue_mgc_coop, 'adan': queue_mgc_Adan_Resing, 'adan_old': queue_mgc_Adan_Resing_old,
+                   'adan_stable': queue_mgc_Adan_Resing_stable}
+    method = dict_method[method]
+
+    dict_server_wq = {}
+
+    charging_time = charging_time / 60
+    stdev_ct = stdev_ct / 60
+    mu = 1 / charging_time
+    vk = stdev_ct / charging_time
+    server = 0
+
+    for mean_waiting_time in waiting_times:
+
+        target_wq_h = mean_waiting_time / 60
+
+        # --- QED initial guess ---
+        c_qed = qed_servers(lambda_target, mu, beta)
+
+        # --- Local search around QED (full search, no early break) ---
+        feasible_servers = []
+
+        best_c = None
+
+        # --- local search around QED ---
+        for server in range(max(1, c_qed - search_radius), min(max_server, c_qed + search_radius) + 1):
+
+            lambda_0, roh, wq, wq_mgc, wz_az = method(mean_waiting_time, server, mu, charging_time, vk)
+
+            # Server feasible if it can serve lambda_target and meets waiting time
+            if lambda_0 >= lambda_target and roh < 1 and wq_mgc <= mean_waiting_time:
+                feasible_servers.append(server)
+
+         # Pick minimal feasible server to honor QED
+        if feasible_servers:
+            best_c = min(feasible_servers)
+        else:
+            best_c = None
+            print(f"Warning: No server satisfies target Wq={mean_waiting_time} min at λ={lambda_target} h⁻¹")
+
+        dict_server_wq[str(mean_waiting_time)] = best_c
+
+    return lambda_target, dict_server_wq
