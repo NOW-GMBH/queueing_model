@@ -377,8 +377,7 @@ def que_mgc(charging_time: int, stdev_ct: int, mean_waiting_time: float, max_ser
       lambda, roh, wq, wq_mgc, and wz/az.
     """
 
-    dict_method = {'coop': queue_mgc_coop, 'adan': queue_mgc_Adan_Resing, 'adan_old': queue_mgc_Adan_Resing_old,
-                   'adan_stable': queue_mgc_Adan_Resing_stable}
+    dict_method = {'coop': queue_mgc_coop, 'adan_old': queue_mgc_Adan_Resing_old, 'adan': queue_mgc_Adan_Resing_stable}
     method = dict_method[method]
 
     charging_time = charging_time / 60
@@ -418,8 +417,7 @@ def que_mgc_server_wq(lambda_target: float, charging_time: int, stdev_ct: int, w
         - Tuple containing the target arrival rate and a dictionary mapping each mean waiting time to the corresponding number of servers.
         """
 
-    dict_method = {'coop': queue_mgc_coop, 'adan': queue_mgc_Adan_Resing, 'adan_old': queue_mgc_Adan_Resing_old,
-                   'adan_stable': queue_mgc_Adan_Resing_stable}
+    dict_method = {'coop': queue_mgc_coop, 'adan_old': queue_mgc_Adan_Resing_old, 'adan': queue_mgc_Adan_Resing_stable}
     method = dict_method[method]
 
     dict_server_wq = {}
@@ -478,26 +476,70 @@ def qed_servers(lambda_rate, mu, beta=1.0):
 def que_mgc_server_wq_qed(lambda_target: float, charging_time: int, stdev_ct: int, waiting_times: list, method:str,
                           beta=1.0, search_radius=10, max_server:int=1000)->tuple:
     """
-        Determines the number of servers required to meet a target arrival rate for various mean waiting times.
+       Determines the required number of servers in an M/G/c queue to serve a target
+       arrival rate under mean waiting-time constraints, with optional QED staffing.
 
-        This function iterates through different waiting times and calculates the optimal number of servers needed based on
-        the specified method (e.g., Cooper or Adan-Resing). It returns a dictionary mapping each waiting time to the
-        corresponding number of servers required to achieve an arrival rate less than or equal to the target.
+       For each target mean waiting time, the function determines the smallest number
+       of servers that:
+         (i) can stably serve the target arrival rate, and
+         (ii) satisfies the specified mean waiting-time constraint.
 
-        Parameters:
-        - lambda_target: Target arrival rate (lambda) in units per hour
-        - charging_time: Average service time in minutes
-        - stdev_ct: Standard deviation of the service time in minutes
-        - waiting_times: List of mean waiting times in minutes for which the number of servers is to be determined
-        - method: Method to use for calculating optimal server count ('coop' or 'adan')
-        - max_server: Maximum number of servers to consider (default is 1000)
+       The underlying waiting-time evaluation is based on an M/G/c approximation
+       (e.g., Cooper or Adan–Resing / Funke). When beta > 0, the search is initialized
+       according to the QED (Halfin–Whitt) staffing rule
+           c ≈ R + beta * sqrt(R),
+       where R = lambda_target / mu is the offered load. The final result, however,
+       is determined by feasibility with respect to the waiting-time constraint.
 
-        Returns:
-        - Tuple containing the target arrival rate and a dictionary mapping each mean waiting time to the corresponding number of servers.
-        """
+       Parameters
+       ----------
+       lambda_target : float
+           Target arrival rate (λ) in units per hour.
 
-    dict_method = {'coop': queue_mgc_coop, 'adan': queue_mgc_Adan_Resing, 'adan_old': queue_mgc_Adan_Resing_old,
-                   'adan_stable': queue_mgc_Adan_Resing_stable}
+       charging_time : int
+           Mean service (charging) time in minutes.
+
+       stdev_ct : int
+           Standard deviation of the service (charging) time in minutes.
+
+       waiting_times : list
+           List of target mean waiting times (in minutes) for which the required
+           number of servers is to be determined.
+
+       method : str
+           Queueing approximation used to evaluate mean waiting times.
+           Supported options include, for example:
+           - 'coop'  : Cooper (1981) M/G/c approximation
+           - 'adan'  : Adan & Resing (2017) / Funke (2018) approximation
+           - 'adan_old': Adan & Resing (2017) / Funke (2018) approximation with bug in sum_term, kept for comparability
+
+       beta : float, optional
+           QED (Halfin–Whitt) quality parameter controlling the amount of safety
+           capacity. beta = 0 corresponds to efficiency-driven staffing, while
+           beta > 0 introduces additional capacity to improve service quality
+           and robustness to variability (default is 1.0).
+
+       search_radius : int, optional
+           Numerical search window around the initial server estimate.
+           This parameter is used for computational efficiency only and has
+           no queueing-theoretic interpretation (default is 10).
+
+       max_server : int, optional
+           Maximum number of servers considered in the search (default is 1000).
+
+       Returns
+       -------
+       tuple
+           A tuple consisting of:
+           - lambda_target : float
+               The target arrival rate.
+           - dict_server_wq : dict
+               Dictionary mapping each target mean waiting time (in minutes)
+               to the corresponding required number of servers. If no feasible
+               solution is found within the search range, the value is None.
+       """
+
+    dict_method = {'coop': queue_mgc_coop, 'adan_old': queue_mgc_Adan_Resing_old, 'adan': queue_mgc_Adan_Resing_stable}
     method = dict_method[method]
 
     dict_server_wq = {}
@@ -521,7 +563,7 @@ def que_mgc_server_wq_qed(lambda_target: float, charging_time: int, stdev_ct: in
         best_c = None
 
         # --- local search around QED ---
-        for server in range(max(1, c_qed - search_radius), min(max_server, c_qed + search_radius) + 1):
+        for server in range(c_qed, min(max_server, c_qed + search_radius) + 1):
 
             lambda_0, roh, wq, wq_mgc, wz_az = method(mean_waiting_time, server, mu, charging_time, vk)
 
