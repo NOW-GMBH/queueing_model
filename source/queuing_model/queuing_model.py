@@ -1,9 +1,112 @@
 import pandas as pd
 import math
-from typing import List, Tuple
+import inspect
+from typing import List, Tuple, Optional
+from functools import wraps
+from pydantic import validate_call, BaseModel, Field, ValidationError, create_model
 
-def queue_mgc_coop(mean_waiting_time: float, server: int, mu: float, charging_time: float, vk: float,
-                   wq_mgc:float=50, roh_0:float=0.99)->list:
+
+class DataInput(BaseModel):
+    mean_waiting_time: float = Field(gt=0, description="Target mean waiting time in minutes")
+    server: int = Field(gt=0, description="Number of parallel servers")
+    charging_time: float = Field(gt=0, description="Average charging time in hours")
+    mu: float = Field(gt=0, description="Mean service rate per server [1/hour]")
+    vk: float = Field(ge=0, description="Coefficient of variation of service times")
+    roh_0: float = Field(gt=0, lt=1, description="Initial utilization factor")
+
+class QueMgcConfig(DataInput):
+    stdev_ct: int = Field(gt=0, description="Standard deviation of charging time in minutes")
+    max_server: int = Field(gt=0, description="Maximum number of parallel servers")
+    method: str = Field(description="Method to use")
+
+class QueMgcServerConfig(DataInput):
+    lambda_target: float = Field(gt=0, description="Lambda to model for")
+    waiting_times: List[float] = Field(description="Waiting times in minutes")
+    stdev_ct: int = Field(gt=0, description="Standard deviation of charging time in minutes")
+    method: str = Field(description="Method to use")
+    beta: float = Field(ge=0, description="QED (Halfin–Whitt) quality parameter")
+    search_radius: Optional[int] = Field(None, ge=1, description="Numerical search window around the initial server estimate")
+    max_server:int = Field(gt=0, le=1000, description="Maximum number of parallel servers")
+
+def validate_with(validation_class: type[BaseModel],
+                  fields: Optional[List[str]] = None):
+    """Decorator der sowohl args als auch kwargs validiert."""
+
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            # Dict als erstes Argument behandeln
+            if len(args) == 1 and isinstance(args[0], dict) and not kwargs:
+                kwargs = args[0]
+                args = ()
+
+            sig = inspect.signature(func)
+            bound_args = sig.bind(*args, **kwargs)
+            bound_args.apply_defaults()
+
+            func_params = set(sig.parameters.keys())
+
+            available_fields = validation_class.model_fields.keys()
+
+            if fields is None:
+                # Keine explizite fields-Liste: Nimm alle die in BEIDEN sind
+                fields_to_validate = set(available_fields) & func_params
+            else:
+                # Explizite fields-Liste: Nimm nur die in allen DREI sind
+                fields_to_validate = set(fields) & set(available_fields) & func_params
+
+            # Extrahiere nur die zu validierenden Werte
+            validation_data = {
+                k: v for k, v in bound_args.arguments.items()
+                if k in fields_to_validate
+            }
+
+            if validation_data:
+                # Erstelle temporäres Model nur mit den relevanten Feldern
+                temp_fields = {}
+                for field_name in validation_data.keys():
+                    if field_name in validation_class.model_fields:
+                        field_info = validation_class.model_fields[field_name]
+                        temp_fields[field_name] = (field_info.annotation, field_info)
+
+                if temp_fields:
+                    TempModel = create_model(
+                        f'{validation_class.__name__}_Partial',
+                        **temp_fields
+                    )
+
+                    try:
+                        TempModel(**validation_data)
+                    except ValidationError as e:
+                        errors = []
+                        for error in e.errors():
+                            field = error['loc'][0]
+                            value = error.get('input')
+                            msg = error['msg']
+                            errors.append(f"  - {field}: {msg} (Wert: {value})")
+
+                        error_msg = (
+                                f"Validierungsfehler in {func.__name__}():\n" +
+                                "\n".join(errors)
+                        )
+                        raise ValueError(error_msg) from e
+
+            return func(*args, **kwargs)
+
+        return wrapper
+
+    return decorator
+
+
+@validate_with(DataInput)
+def queue_mgc_coop(mean_waiting_time: float,
+                    server: int,
+                    mu: float,
+                    charging_time: float,
+                    vk: float,
+                    wq_mgc_init: float = 50,
+                    roh_0: float = 0.99,
+                    max_iterations: int = 100000)-> List[float]:
     """
     Approximate M/G/c queueing model based on Cooper (1990, p.508, Eq. 9.3).
 
@@ -23,12 +126,27 @@ def queue_mgc_coop(mean_waiting_time: float, server: int, mu: float, charging_ti
     :return:  list
         [λ₀ (1/h), ρ, Wq_MM_c (min), Wq_MG_c (min), Wq/ServiceTime ratio]
     """
-
     # After Cooper 1990 - S.508 - Formel 9.3
-    lambda_0 = roh_0 * (server * mu)
 
-    while (wq_mgc > mean_waiting_time / 60):
+
+    target_wq_h = mean_waiting_time / 60
+    lambda_0 = roh_0 * (server * mu)
+    roh = roh_0
+    wq = 0.0
+    wq_mgc = wq_mgc_init
+    wz_az = 0.0
+
+    iterations = 0
+    while (wq_mgc > target_wq_h):
+
+        iterations += 1
+        if iterations >= max_iterations:
+            raise ValueError(f"Did not converge in {max_iterations} iterations")
+
         lambda_0 -= 0.0001
+        if lambda_0 <= 0:
+            raise ValueError("Lambda became non-positive")
+
         roh = lambda_0 / (server * mu)
         wq = (roh / (1 - roh)) * (charging_time / server)
         wq_mgc = wq * ((1 + vk ** 2) / 2)
@@ -36,7 +154,7 @@ def queue_mgc_coop(mean_waiting_time: float, server: int, mu: float, charging_ti
 
     return [lambda_0, roh, wq * 60, wq_mgc * 60, wz_az]
 
-
+@validate_with(DataInput)
 def queue_mgc_Adan_Resing_old(mean_waiting_time, server, mu, charging_time, vk, wq_mgc=50, roh_0=0.99):
     """
     Warteschlangenmodell im M/G/c-System nach Adan & Resing (2017)
@@ -76,123 +194,6 @@ def queue_mgc_Adan_Resing_old(mean_waiting_time, server, mu, charging_time, vk, 
         wz_az = wq_mgc / charging_time
 
     return [lambda_0, roh, wq * 60, wq_mgc * 60, wz_az]
-
-def queue_mgc_Adan_Resing(mean_waiting_time: float, server: int, mu: float, charging_time: float, vk: float,
-                          wq_mgc:float=50, roh_0:float=0.99)->list:
-    """
-
-    Calculates the maximum arrival rate for a queueing model using the M/G/c system on the basis of the Adan & Resing (2017)
-    and Funke (2018) approoximation.
-
-    Funke (2018) - https://urn.fi/urn:nbn:de:hebis:34-2018041155288
-
-    The function iteratively adjusts the arrival rate (lambda) until the mean waiting time in the queue meets or exceeds the target.
-    It uses an approximation method based on Erlang-C formula and adapts it for multiple servers.
-
-    Parameters:
-    - mean_waiting_time: Target average waiting time in minutes
-    - server: Number of servers available
-    - mu: Service rate per server (1 / charging_time)
-    - charging_time: Average service time per unit of the system
-    - vk: Variations coefficient (standard deviation divided by mean value)
-    - wq_mgc: Initial guess for the average waiting time in minutes
-    - roh_0: Initial guess for the utilization
-
-    Returns:
-    - List containing adjusted lambda, utilization (roh), average waiting time in minutes, and other statistics.
-    """
-    # --- GEGEBENE GRUNDWERTE ---
-    # lambda_0 = roh_0 * (server * mu)
-    # wird unten dynamisch angepasst
-    # mean_waiting_time in Minuten
-    # charging_time = durchschnittliche Bedienzeit (z. B. 0.5 Stunden = 30 Min)
-    # mu = 1 / charging_time
-    # vk = Variationskoeffizient (Standardabweichung / Mittelwert)
-
-    # ----------------------------------------------
-    # START DER ITERATION
-    # ----------------------------------------------
-
-    lambda_0 = roh_0 * (server * mu)
-
-    # Schleife: reduziere λ, bis Wartezeit ≤ Ziel
-    while wq_mgc > mean_waiting_time / 60:  # mean_waiting_time in Minuten → /60 = Stunden
-        lambda_0 -= 0.0001  # Reduzierung der Ankunftsrate
-
-        roh = lambda_0 / (server * mu)
-
-        if roh >= 1:
-            # System instabil → überspringen
-            continue
-
-        # ----------------------------------------------
-        # M/M/c-Formel nach Adan & Resing (2017)
-        # ----------------------------------------------
-        if server > 1:
-            cr = server * roh  # Hilfsgröße
-
-            term = 1.0
-            sum_terms = term
-
-            for n in range(1, server):
-                term *= cr / n
-                # Summe: ∑_{n=0}^{c-1} (cρ)^n / n!
-                sum_terms += term
-
-            # last_term = (cr^server)/server! → einfach weitere Iteration
-            term *= cr / server
-            # Letzter Term: (cρ)^c / c!
-            last_term = term
-
-            # Denominator gemäß Paper:
-            denom = (1 - roh) * sum_terms + last_term
-
-            # Erlang-C-Wahrscheinlichkeit (P_wait)
-            P_wait = last_term / denom
-
-            # M/M/c mittlere Wartezeit Wq_MM_c
-            wq = P_wait / (server * mu * (1 - roh))
-
-        # ----------------------------------------------
-        # Spezialfall: nur 1 Server → M/G/1 (Pollaczek–Khinchine)
-        # ----------------------------------------------
-        else:
-            E_S = charging_time  # mittlere Bedienzeit
-            E_S2 = E_S ** 2 * (1 + vk ** 2)  # zweites Moment über cv
-            wq = (lambda_0 * E_S2) / (2 * (1 - roh))  # exakte PK-Formel
-
-        # ----------------------------------------------
-        # M/G/c-Approximation nach Funke (2018):
-        # Wq_MGc = ((1 + C^2)/2) * Wq_MM_c
-        # ----------------------------------------------
-        if server > 1:
-            wq_mgc = wq * ((1 + vk ** 2) / 2)
-        else:
-            wq_mgc = wq  # bei M/G/1 schon exakte PK-Formel
-
-        # Verhältnis Wartezeit zu Servicezeit
-        wz_az = wq_mgc / charging_time
-    return [lambda_0, roh, wq * 60, wq_mgc * 60, wz_az]
-
-
-def calculate_min_servers(lambda_, mu, max_mean_waiting_time, vk):
-    """Adan-Resing"""
-    c = 1
-    while True:
-        rho = lambda_ / (c * mu)
-        if rho >= 1:
-            c += 1
-            continue
-        cr = c * rho
-        sum_terms = sum((cr ** n) / math.factorial(n) for n in range(0, c))
-        last_term = (cr ** c) / math.factorial(c)
-        denom = (1 - rho) * sum_terms + last_term
-        P_wait = last_term / denom
-        wq_mm_c = P_wait / (c * mu * (1 - rho))
-        wq_mg_c = ((1 + vk ** 2) / 2) * wq_mm_c
-        if wq_mg_c <= max_mean_waiting_time:
-            return c, lambda_, rho, wq_mg_c * 60, wq_mm_c * 60,
-        c += 1
 
 
 def _logsumexp(values: List[float]) -> float:
@@ -243,14 +244,14 @@ def _compute_wq_for_lambda(
     lmbda: float,
     c: int,
     mu: float,
-    charging_time: float,
+    charging_time_hours: float,
     vk: float
 ) -> Tuple[float, float, float]:
     """
     Berechne roh, Wq_MM_c (in Minuten) und Wq_MGc (in Minuten)
     für eine gegebene Ankunftsrate λ.
 
-    charging_time_min: Bedienzeit *in Minuten*
+    charging_time_hours: Bedienzeit *in Stunden*
     mu: Service rate pro Server = 1 / (charging_time_in_hours)
     """
 
@@ -266,7 +267,7 @@ def _compute_wq_for_lambda(
     # M/G/1 Fall
     # -----------------------------
     if c == 1:
-        E_S = charging_time
+        E_S = charging_time_hours
         E_S2 = E_S * E_S * (1 + vk * vk)
         wq_hours = (lmbda * E_S2) / (2 * (1 - roh))
         wq_mgc_hours = wq_hours
@@ -286,6 +287,7 @@ def _compute_wq_for_lambda(
 
     return roh, wq_hours * 60, wq_mgc_hours * 60  # alles in Minuten
 
+@validate_with(DataInput)
 def queue_mgc_Adan_Resing_stable(
     mean_waiting_time: float,
     server: int,
@@ -311,7 +313,6 @@ def queue_mgc_Adan_Resing_stable(
     """
 
     target_wq_min = mean_waiting_time
-    target_wq_hr = mean_waiting_time / 60.0
 
     # Obergrenze für λ: systemstabil knapp unter c*mu
     lambda_high = server * mu * roh_start
@@ -350,6 +351,9 @@ def queue_mgc_Adan_Resing_stable(
     # Verhältnis Warten/Bedienen
     wz_az = best_wq_mgc_min / (charging_time/60)
 
+    if best_lambda == 0.0 and target_wq_min > 0:
+        raise ValueError("No lambda found that meets the waiting-time target; try higher server count.")
+
     return [
         best_lambda,
         best_roh,
@@ -358,6 +362,7 @@ def queue_mgc_Adan_Resing_stable(
         wz_az
     ]
 
+@validate_with(QueMgcConfig)
 def que_mgc(charging_time: int, stdev_ct: int, mean_waiting_time: float, max_server: int, method):
     """
     Calculates the maximum arrival rate for various server counts in a queueing model using different methods.
@@ -395,7 +400,7 @@ def que_mgc(charging_time: int, stdev_ct: int, mean_waiting_time: float, max_ser
 
     return queue
 
-
+@validate_with(QueMgcServerConfig)
 def que_mgc_server_wq(lambda_target: float, charging_time: int, stdev_ct: int, waiting_times: list, method:str,
                       max_server:int=1000)->tuple:
     """
@@ -426,22 +431,25 @@ def que_mgc_server_wq(lambda_target: float, charging_time: int, stdev_ct: int, w
     stdev_ct = stdev_ct / 60
     mu = 1 / charging_time
     vk = stdev_ct / charging_time
-    server = 0
 
     for mean_waiting_time in waiting_times:
+        chosen_server = None
 
         for server in range(1, max_server + 1):
 
-            lambda_0, roh, wq, wq_mgc, wz_az = method(mean_waiting_time, server, mu, charging_time, vk)
+            lambda_max, roh, wq_mm_min, wq_mgc_min, wz_az = method(mean_waiting_time, server, mu, charging_time, vk)
+            if mean_waiting_time > 0 and lambda_max <= 0:
+                continue
 
-            if lambda_0 > lambda_target:
+            if lambda_max > lambda_target:
+                chosen_server = server
                 break
 
-        dict_server_wq[str(mean_waiting_time)] = server
+        dict_server_wq[str(mean_waiting_time)] = chosen_server
 
     return lambda_target, dict_server_wq
 
-
+@validate_with(QueMgcConfig)
 def queue_wq_roh_coop(roh_range, server, charging_time, stdev_ct):
     queue = pd.DataFrame(columns=['lambda', 'server', 'roh', 'wq', 'wq_mgc', 'wz/az', 'krit_wert'])
 
@@ -473,8 +481,9 @@ def qed_servers(lambda_rate, mu, beta=1.0):
     R = lambda_rate / mu
     return math.ceil(R + beta * math.sqrt(R))
 
+@validate_with(QueMgcServerConfig)
 def que_mgc_server_wq_qed(lambda_target: float, charging_time: int, stdev_ct: int, waiting_times: list, method:str,
-                          beta=1.0, search_radius=10, max_server:int=1000)->tuple:
+                          beta=1.0, search_radius: int = None, max_server:int=1000)->tuple:
     """
        Determines the required number of servers in an M/G/c queue to serve a target
        arrival rate under mean waiting-time constraints, with optional QED staffing.
@@ -548,27 +557,34 @@ def que_mgc_server_wq_qed(lambda_target: float, charging_time: int, stdev_ct: in
     stdev_ct = stdev_ct / 60
     mu = 1 / charging_time
     vk = stdev_ct / charging_time
-    server = 0
+
+    # minimum server count for stability
+    min_stable_servers = math.ceil(lambda_target / mu)
+
+    if search_radius is None:
+        R = lambda_target / mu
+        search_radius = int(round(max(5, 2 * math.sqrt(R)),0))
+        print(f"Auto search_radius = {search_radius:.1f} (2√R={2 * math.sqrt(R):.1f})")
 
     for mean_waiting_time in waiting_times:
-
-        target_wq_h = mean_waiting_time / 60
 
         # --- QED initial guess ---
         c_qed = qed_servers(lambda_target, mu, beta)
 
+        search_start = max(min_stable_servers, c_qed - search_radius)
+        search_end = min(max_server, c_qed + search_radius)
+
         # --- Local search around QED (full search, no early break) ---
         feasible_servers = []
 
-        best_c = None
-
         # --- local search around QED ---
-        for server in range(c_qed, min(max_server, c_qed + search_radius) + 1):
+        for server in range(search_start, search_end + 1):
 
-            lambda_0, roh, wq, wq_mgc, wz_az = method(mean_waiting_time, server, mu, charging_time, vk)
+
+            lambda_max, roh_max, wq_mm_c, wq_mg_c, wz_az = method(mean_waiting_time, server, mu, charging_time, vk)
 
             # Server feasible if it can serve lambda_target and meets waiting time
-            if lambda_0 >= lambda_target and roh < 1 and wq_mgc <= mean_waiting_time:
+            if lambda_max >= lambda_target:
                 feasible_servers.append(server)
 
          # Pick minimal feasible server to honor QED
