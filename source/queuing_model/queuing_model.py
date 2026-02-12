@@ -1,13 +1,13 @@
 import pandas as pd
 import math
 import inspect
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Literal
 from functools import wraps
 from pydantic import validate_call, BaseModel, Field, ValidationError, create_model
 
 
 class DataInput(BaseModel):
-    mean_waiting_time: float = Field(gt=0, description="Target mean waiting time in minutes")
+    mean_waiting_time: float = Field(ge=0, description="Target mean waiting time in minutes")
     server: int = Field(gt=0, description="Number of parallel servers")
     charging_time: float = Field(gt=0, description="Average charging time in hours")
     mu: float = Field(gt=0, description="Mean service rate per server [1/hour]")
@@ -17,16 +17,22 @@ class DataInput(BaseModel):
 class QueMgcConfig(DataInput):
     stdev_ct: int = Field(gt=0, description="Standard deviation of charging time in minutes")
     max_server: int = Field(gt=0, description="Maximum number of parallel servers")
-    method: str = Field(description="Method to use")
+    method: Literal["coop", "adan", "adan_old"]
 
 class QueMgcServerConfig(DataInput):
     lambda_target: float = Field(gt=0, description="Lambda to model for")
     waiting_times: List[float] = Field(description="Waiting times in minutes")
     stdev_ct: int = Field(gt=0, description="Standard deviation of charging time in minutes")
-    method: str = Field(description="Method to use")
+    method: Literal["coop", "adan", "adan_old"]
     beta: float = Field(ge=0, description="QED (Halfin–Whitt) quality parameter")
     search_radius: Optional[int] = Field(None, ge=1, description="Numerical search window around the initial server estimate")
     max_server:int = Field(gt=0, le=1000, description="Maximum number of parallel servers")
+
+
+from typing import List, Optional
+from functools import wraps
+from pydantic import BaseModel, ValidationError
+
 
 def validate_with(validation_class: type[BaseModel],
                   fields: Optional[List[str]] = None):
@@ -97,6 +103,12 @@ def validate_with(validation_class: type[BaseModel],
 
     return decorator
 
+
+def server_utilization(lambda_target: float, servers: int, mu: float) -> float:
+    """average server utilization ρ = λ/(cμ)"""
+    if servers * mu <= 0:
+        raise ValueError("Invalid parameters")
+    return lambda_target / (servers * mu)
 
 @validate_with(DataInput)
 def queue_mgc_coop(mean_waiting_time: float,
@@ -481,6 +493,11 @@ def qed_servers(lambda_rate, mu, beta=1.0):
     R = lambda_rate / mu
     return math.ceil(R + beta * math.sqrt(R))
 
+def auto_search_radius(lambda_target, mu):
+    R = lambda_target / mu
+    search_radius = int(round(max(5, 2 * math.sqrt(R)), 0))
+    return search_radius
+
 @validate_with(QueMgcServerConfig)
 def que_mgc_server_wq_qed(lambda_target: float, charging_time: int, stdev_ct: int, waiting_times: list, method:str,
                           beta=1.0, search_radius: int = None, max_server:int=1000)->tuple:
@@ -562,9 +579,8 @@ def que_mgc_server_wq_qed(lambda_target: float, charging_time: int, stdev_ct: in
     min_stable_servers = math.ceil(lambda_target / mu)
 
     if search_radius is None:
-        R = lambda_target / mu
-        search_radius = int(round(max(5, 2 * math.sqrt(R)),0))
-        print(f"Auto search_radius = {search_radius:.1f} (2√R={2 * math.sqrt(R):.1f})")
+        search_radius = auto_search_radius(lambda_target, mu)
+        print(f"Auto search_radius = {search_radius:.1f}")
 
     for mean_waiting_time in waiting_times:
 
