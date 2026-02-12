@@ -128,7 +128,7 @@ def queue_mgc_coop(
     vk: float,
     wq_mgc_init: float = 50,
     roh_0: float = 0.99,
-    max_iterations: int = 100000,
+    max_iterations: int = 1000000,
 ) -> List[float]:
     """
     Approximate M/G/c queueing model based on Cooper (1990, p.508, Eq. 9.3).
