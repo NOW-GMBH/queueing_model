@@ -1,5 +1,5 @@
 import math
-from typing import List, Dict, Any
+from typing import Dict, Any
 import numpy as np
 import pytest
 from queuing_model.queuing_model import (
@@ -7,32 +7,28 @@ from queuing_model.queuing_model import (
     queue_mgc_Adan_Resing_stable,
     _compute_wq_for_lambda,
     _erlang_c_prob_wait,
-
     # Wrappers
     que_mgc,
-    que_mgc_server_wq,
     que_mgc_server_wq_qed,
-
     # Configs
     QueMgcServerConfig,
-    QueMgcConfig,
-
-    # Utilities
     server_utilization,
     qed_servers,
-    auto_search_radius)
+    auto_search_radius,
+)
+
 
 @pytest.fixture(scope="session")
 def standard_params() -> Dict[str, Any]:
     """Standard Testparameter"""
     return {
-        'lambda_target': 10.0,
-        'charging_time': 45,
-        'stdev_ct': 10,
-        'waiting_times': [5, 10, 20, 60],
-        'method': 'adan',
-        'beta': 1.0,
-        'max_server': 20
+        "lambda_target": 10.0,
+        "charging_time": 45,
+        "stdev_ct": 10,
+        "waiting_times": [5, 10, 20, 60],
+        "method": "adan",
+        "beta": 1.0,
+        "max_server": 20,
     }
 
 
@@ -66,11 +62,16 @@ class TestCoreFunctions:
         # ρ=1
         assert _erlang_c_prob_wait(5, 1.0) == 1.0
 
-    @pytest.mark.parametrize("mean_waiting_time, servers", [
-        (5.0, 10),  # strenges Ziel
-        (60.0, 8),  # großzügig
-    ])
-    def test_queue_mgc_Adan_Resing_stable_convergence(self, mean_waiting_time: float, servers: int):
+    @pytest.mark.parametrize(
+        "mean_waiting_time, servers",
+        [
+            (5.0, 10),  # strenges Ziel
+            (60.0, 8),  # großzügig
+        ],
+    )
+    def test_queue_mgc_Adan_Resing_stable_convergence(
+        self, mean_waiting_time: float, servers: int
+    ):
         """Testet stabile Konvergenz"""
         mu = 60 / 45  # 1.333
         charging_time_h = 45 / 60
@@ -110,7 +111,9 @@ class TestCoreFunctions:
         assert wz_az > 0.0
 
         # Mit pytest.approx für Float-Toleranz
-        assert (wq_mm_c_min / 60) == pytest.approx((roh / (1 - roh)) * (charging_time / server), rel=1e-6)
+        assert (wq_mm_c_min / 60) == pytest.approx(
+            (roh / (1 - roh)) * (charging_time / server), rel=1e-6
+        )
 
     def test_queue_mgc_coop_fixed_no_unboundlocal(self):
         """Testet coop ohne UnboundLocalError"""
@@ -123,14 +126,19 @@ class TestCoreFunctions:
 class TestWrapperFunctions:
     """Tests für Wrapper und Integration"""
 
-    @pytest.mark.parametrize("wq_target, expected_min_servers", [
-        (5.0, 10),
-        (10.0, 9),
-        (60.0, 8),
-    ])
-    def test_que_mgc_server_wq_qed_correctness(self, standard_params, wq_target, expected_min_servers):
+    @pytest.mark.parametrize(
+        "wq_target, expected_min_servers",
+        [
+            (5.0, 10),
+            (10.0, 9),
+            (60.0, 8),
+        ],
+    )
+    def test_que_mgc_server_wq_qed_correctness(
+        self, standard_params, wq_target, expected_min_servers
+    ):
         """Korrekte minimale Serverzahlen"""
-        standard_params['waiting_times'] = [wq_target]
+        standard_params["waiting_times"] = [wq_target]
         result = que_mgc_server_wq_qed(**standard_params)
         found_servers = result[1][str(wq_target)]
         assert found_servers == expected_min_servers
@@ -138,13 +146,13 @@ class TestWrapperFunctions:
     def test_que_mgc_monotonic_increasing_lambda(self, standard_params):
         """que_mgc: λ_max(c) wächst monoton"""
         df = que_mgc(
-            standard_params['charging_time'],
-            standard_params['stdev_ct'],
+            standard_params["charging_time"],
+            standard_params["stdev_ct"],
             5.0,  # Wq=5 min
-            standard_params['max_server'],
-            standard_params['method']
+            standard_params["max_server"],
+            standard_params["method"],
         )
-        lambdas = df['lambda'].values
+        lambdas = df["lambda"].values
         assert np.all(np.diff(lambdas) >= 0)  # Monoton wachsend
 
     def test_qed_servers_formula(self):
@@ -162,6 +170,7 @@ class TestWrapperFunctions:
         """Kleines System"""
         search_radius = auto_search_radius(1, 6.0)
         assert search_radius == 5  # Minimum!
+
 
 class TestConfigValidation:
     """Pydantic Validierung"""
@@ -181,7 +190,7 @@ class TestConfigValidation:
                 roh_0=0.99,
                 beta=1.0,
                 search_radius=None,
-                max_server=100
+                max_server=100,
             )
 
     def test_negative_lambda_error(self):
@@ -199,28 +208,25 @@ class TestConfigValidation:
                 roh_0=0.99,
                 beta=1.0,
                 search_radius=None,
-                max_server=100
+                max_server=100,
             )
-
-
 
 
 class TestEdgeCases:
     """Edge Cases und Robustheit"""
 
-
     def test_zero_waiting_time(self):
         """Wq=0 → unendlich viele Server oder None"""
         result = que_mgc_server_wq_qed(10, 45, 10, [0], "adan")
-        assert result[1]['0'] is None or result[1]['0'] > 100
+        assert result[1]["0"] is None or result[1]["0"] > 100
 
     def test_large_system_scaling(self):
         """Großes System testet Skalierung"""
         result = que_mgc_server_wq_qed(
             1000, 45, 10, [5], "adan", beta=2, max_server=1000
         )
-        assert result[1]['5'] is not None
-        assert result[1]['5'] < 1000
+        assert result[1]["5"] is not None
+        assert result[1]["5"] < 1000
 
 
 class TestPerformanceMetrics:
@@ -238,49 +244,61 @@ class TestPerformanceMetrics:
 
 
 # pytest parametrized für alle Methoden
-@pytest.mark.parametrize("method,expected_servers", [
-    ("coop", {'5': 11, '10': 10, '20': 9, '60': 8}),
-    ("adan", {'5': 10, '10': 9, '20': 9, '60': 8}),
-])
+@pytest.mark.parametrize(
+    "method,expected_servers",
+    [
+        ("coop", {"5": 11, "10": 10, "20": 9, "60": 8}),
+        ("adan", {"5": 10, "10": 9, "20": 9, "60": 8}),
+    ],
+)
 def test_que_mgc_server_wq_qed_consistency(standard_params, method, expected_servers):
     """que_mgc_server_wq_qed gibt erwartete Server-Anzahlen für alle Methoden"""
     params = standard_params.copy()
-    params['method'] = method
+    params["method"] = method
 
     lambda_value, server_dict = que_mgc_server_wq_qed(**params)
 
     assert lambda_value > 0, f"{method}: Lambda sollte positiv sein"
-    assert len(server_dict) == len(expected_servers), \
-        f"{method}: Erwartet {len(expected_servers)} waiting_times, bekommen {len(server_dict)}"
+    assert len(server_dict) == len(
+        expected_servers
+    ), f"{method}: Erwartet {len(expected_servers)} waiting_times, bekommen {len(server_dict)}"
 
     for waiting_time_str, expected_server in expected_servers.items():
-        assert waiting_time_str in server_dict, \
-            f"{method}: waiting_time {waiting_time_str} fehlt in {server_dict}"
-        assert server_dict[waiting_time_str] == expected_server, \
-            f"{method}: Für waiting_time={waiting_time_str} erwartet {expected_server}, bekommen {server_dict[waiting_time_str]}"
+        assert (
+            waiting_time_str in server_dict
+        ), f"{method}: waiting_time {waiting_time_str} fehlt in {server_dict}"
+        assert (
+            server_dict[waiting_time_str] == expected_server
+        ), f"{method}: Für waiting_time={waiting_time_str} erwartet {expected_server}, bekommen {server_dict[waiting_time_str]}"
 
-@pytest.mark.parametrize("method,expected_servers", [
-    ("coop", {'5': 11, '10': 10, '20': 9, '60': 8}),
-    ("adan", {'5': 10, '10': 9, '20': 9, '60': 8}),
-])
+
+@pytest.mark.parametrize(
+    "method,expected_servers",
+    [
+        ("coop", {"5": 11, "10": 10, "20": 9, "60": 8}),
+        ("adan", {"5": 10, "10": 9, "20": 9, "60": 8}),
+    ],
+)
 def test_que_mgc_server_wq_consistency(standard_params, method, expected_servers):
     """que_mgc_server_wq gibt erwartete Lambda- und Rho-Werte"""
     params = standard_params.copy()
-    params = {k: v for k, v in params.items() if k != 'beta'}
-    params['method'] = method
+    params = {k: v for k, v in params.items() if k != "beta"}
+    params["method"] = method
 
     lambda_value, server_dict = que_mgc_server_wq_qed(**params)
 
     assert lambda_value > 0, f"{method}: Lambda sollte positiv sein"
-    assert len(server_dict) == len(expected_servers), \
-        f"{method}: Erwartet {len(expected_servers)} waiting_times, bekommen {len(server_dict)}"
+    assert len(server_dict) == len(
+        expected_servers
+    ), f"{method}: Erwartet {len(expected_servers)} waiting_times, bekommen {len(server_dict)}"
 
     for waiting_time_str, expected_server in expected_servers.items():
-        assert waiting_time_str in server_dict, \
-            f"{method}: waiting_time {waiting_time_str} fehlt in {server_dict}"
-        assert server_dict[waiting_time_str] == expected_server, \
-            f"{method}: Für waiting_time={waiting_time_str} erwartet {expected_server}, bekommen {server_dict[waiting_time_str]}"
-
+        assert (
+            waiting_time_str in server_dict
+        ), f"{method}: waiting_time {waiting_time_str} fehlt in {server_dict}"
+        assert (
+            server_dict[waiting_time_str] == expected_server
+        ), f"{method}: Für waiting_time={waiting_time_str} erwartet {expected_server}, bekommen {server_dict[waiting_time_str]}"
 
 
 if __name__ == "__main__":
