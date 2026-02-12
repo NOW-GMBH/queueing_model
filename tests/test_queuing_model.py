@@ -138,6 +138,7 @@ class TestWrapperFunctions:
         self, standard_params, wq_target, expected_min_servers
     ):
         """Korrekte minimale Serverzahlen"""
+        standard_params = standard_params.copy()
         standard_params["waiting_times"] = [wq_target]
         result = que_mgc_server_wq_qed(**standard_params)
         found_servers = result[1][str(wq_target)]
