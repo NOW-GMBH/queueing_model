@@ -13,7 +13,7 @@ class DataInput(BaseModel):
     server: int = Field(gt=0, description="Number of parallel servers")
     charging_time: float = Field(gt=0, description="Average charging time in hours")
     mu: float = Field(gt=0, description="Mean service rate per server [1/hour]")
-    vk: float = Field(ge=0, description="Coefficient of variation of service times")
+    cv: float = Field(ge=0, description="Coefficient of variation of service times")
     roh_0: float = Field(gt=0, lt=1, description="Initial utilization factor")
 
 
@@ -125,7 +125,7 @@ def queue_mgc_coop(
     server: int,
     mu: float,
     charging_time: float,
-    vk: float,
+    cv: float,
     wq_mgc_init: float = 50,
     roh_0: float = 0.99,
     max_iterations: int = 1000000,
@@ -135,7 +135,7 @@ def queue_mgc_coop(
 
     Iteratively determines the maximum arrival rate (λ₀) for a multi-server queue
     such that the mean waiting time does not exceed a target value.
-    The method uses Cooper’s simplified approximation for M/M/c systems and
+    The method uses Cooper’s simplified approximation for M/M/1 systems and
     extends it to M/G/c by applying a correction factor based on the coefficient
     of variation of service times (vₖ).
 
@@ -143,7 +143,7 @@ def queue_mgc_coop(
     :param server: Number of parallel servers (charging points).
     :param mu: Mean service rate per server [1/hour].
     :param charging_time: Average service (charging) time per customer in hours.
-    :param vk: Coefficient of variation of service times (standard deviation / mean).
+    :param cv: Coefficient of variation of service times (standard deviation / mean).
     :param wq_mgc: Initial waiting time guess (in hours). Default is 50.
     :param roh_0: Initial utilization factor (ρ₀), default is 0.99.
     :return:  list
@@ -171,7 +171,7 @@ def queue_mgc_coop(
 
         roh = lambda_0 / (server * mu)
         wq = (roh / (1 - roh)) * (charging_time / server)
-        wq_mgc = wq * ((1 + vk**2) / 2)
+        wq_mgc = wq * ((1 + cv**2) / 2)
         wz_az = wq_mgc / charging_time
 
     return [lambda_0, roh, wq * 60, wq_mgc * 60, wz_az]
@@ -179,7 +179,7 @@ def queue_mgc_coop(
 
 @validate_with(DataInput)
 def queue_mgc_Adan_Resing_old(
-    mean_waiting_time, server, mu, charging_time, vk, wq_mgc=50, roh_0=0.99
+    mean_waiting_time, server, mu, charging_time, cv, wq_mgc=50, roh_0=0.99
 ):
     """
     Warteschlangenmodell im M/G/c-System nach Adan & Resing (2017)
@@ -192,7 +192,7 @@ def queue_mgc_Adan_Resing_old(
     :param server:
     :param mu:
     :param charging_time:
-    :param vk:
+    :param cv:
     :param wq_mgc:
     :param roh_0:
     :return:
@@ -225,7 +225,7 @@ def queue_mgc_Adan_Resing_old(
         else:
             wq = (roh / (1 - roh)) * (charging_time / server)
 
-        wq_mgc = wq * ((1 + vk**2) / 2)
+        wq_mgc = wq * ((1 + cv**2) / 2)
         wz_az = wq_mgc / charging_time
 
     return [lambda_0, roh, wq * 60, wq_mgc * 60, wz_az]
@@ -277,7 +277,7 @@ def _erlang_c_prob_wait(c: int, rho: float) -> float:
 
 
 def _compute_wq_for_lambda(
-    lmbda: float, c: int, mu: float, charging_time_hours: float, vk: float
+    lmbda: float, c: int, mu: float, charging_time_hours: float, cv: float
 ) -> Tuple[float, float, float]:
     """
     Berechne roh, Wq_MM_c (in Minuten) und Wq_MGc (in Minuten)
@@ -300,7 +300,7 @@ def _compute_wq_for_lambda(
     # -----------------------------
     if c == 1:
         E_S = charging_time_hours
-        E_S2 = E_S * E_S * (1 + vk * vk)
+        E_S2 = E_S * E_S * (1 + cv * cv)
         wq_hours = (lmbda * E_S2) / (2 * (1 - roh))
         wq_mgc_hours = wq_hours
         return roh, wq_hours * 60, wq_mgc_hours * 60  # in Minuten
@@ -315,7 +315,7 @@ def _compute_wq_for_lambda(
     # -----------------------------
     # M/G/c (Funke) Approximation
     # -----------------------------
-    wq_mgc_hours = wq_hours * ((1 + vk * vk) / 2.0)
+    wq_mgc_hours = wq_hours * ((1 + cv * cv) / 2.0)
 
     return roh, wq_hours * 60, wq_mgc_hours * 60  # alles in Minuten
 
@@ -326,7 +326,7 @@ def queue_mgc_Adan_Resing_stable(
     server: int,
     mu: float,
     charging_time: float,
-    vk: float,
+    cv: float,
     roh_start: float = 0.999999,
     tol_minutes: float = 1e-5,
     max_iter: int = 80,
@@ -339,7 +339,7 @@ def queue_mgc_Adan_Resing_stable(
     - mean_waiting_time (Min)
     - server = c (Anzahl Server)
     - charging_time_min (Min!)
-    - vk = Variationskoeffizient
+    - cv = Variationskoeffizient
 
     Rückgabe:
     [lambda, roh, Wq_MM_c_min, Wq_MGc_min, wz_az]
@@ -360,7 +360,7 @@ def queue_mgc_Adan_Resing_stable(
         mid = 0.5 * (lambda_low + lambda_high)
 
         roh, wq_min, wq_mgc_min = _compute_wq_for_lambda(
-            mid, server, mu, charging_time, vk
+            mid, server, mu, charging_time, cv
         )
 
         if not math.isfinite(wq_mgc_min):
@@ -424,7 +424,7 @@ def que_mgc(
     charging_time = charging_time / 60
     stdev_ct = stdev_ct / 60
     mu = 1 / charging_time
-    vk = stdev_ct / charging_time
+    cv = stdev_ct / charging_time
 
     queue = pd.DataFrame(
         0.0,
@@ -435,7 +435,7 @@ def que_mgc(
     for server in range(1, max_server + 1):
         queue.loc[server, ["servers", "lambda", "roh", "wq", "wq_mgc", "wz/az"]] = [
             server
-        ] + method(mean_waiting_time, server, mu, charging_time, vk)
+        ] + method(mean_waiting_time, server, mu, charging_time, cv)
 
     return queue
 
@@ -480,7 +480,7 @@ def que_mgc_server_wq(
     charging_time = charging_time / 60
     stdev_ct = stdev_ct / 60
     mu = 1 / charging_time
-    vk = stdev_ct / charging_time
+    cv = stdev_ct / charging_time
 
     for mean_waiting_time in waiting_times:
         chosen_server = None
@@ -488,7 +488,7 @@ def que_mgc_server_wq(
         for server in range(1, max_server + 1):
 
             lambda_max, roh, wq_mm_min, wq_mgc_min, wz_az = method(
-                mean_waiting_time, server, mu, charging_time, vk
+                mean_waiting_time, server, mu, charging_time, cv
             )
             if mean_waiting_time > 0 and lambda_max <= 0:
                 continue
@@ -511,14 +511,14 @@ def queue_wq_roh_coop(roh_range, server, charging_time, stdev_ct):
     charging_time = charging_time / 60
     stdev_ct = stdev_ct / 60
     mu = 1 / charging_time
-    vk = stdev_ct / charging_time
+    cv = stdev_ct / charging_time
 
     for roh in roh_range:
         lambda_value = roh * (server * mu)
 
         if roh < 1:
             wq = (roh / (1 - roh)) * (charging_time / server)
-            wq_mgc = wq * ((1 + vk**2) / 2)
+            wq_mgc = wq * ((1 + cv**2) / 2)
             wz_az = wq_mgc / charging_time
         else:
             break
@@ -640,7 +640,7 @@ def que_mgc_server_wq_qed(
     charging_time = charging_time / 60
     stdev_ct = stdev_ct / 60
     mu = 1 / charging_time
-    vk = stdev_ct / charging_time
+    cv = stdev_ct / charging_time
 
     # minimum server count for stability
     min_stable_servers = math.ceil(lambda_target / mu)
@@ -664,7 +664,7 @@ def que_mgc_server_wq_qed(
         for server in range(search_start, search_end + 1):
 
             lambda_max, roh_max, wq_mm_c, wq_mg_c, wz_az = method(
-                mean_waiting_time, server, mu, charging_time, vk
+                mean_waiting_time, server, mu, charging_time, cv
             )
 
             # Server feasible if it can serve lambda_target and meets waiting time
