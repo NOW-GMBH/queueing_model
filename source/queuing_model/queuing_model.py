@@ -66,6 +66,25 @@ def convert_units(
 
 
 def _get_factor(direction: str) -> float:
+    """Look up the unit conversion factor for a given direction.
+
+    Parameters
+    ----------
+    direction : str
+        Conversion key. Must be one of ``'hours_to_minutes'``,
+        ``'hours_to_seconds'``, or ``'hours_to_days'``.
+
+    Returns
+    -------
+    float
+        Multiplication factor to convert a value expressed in hours to the
+        target unit.
+
+    Raises
+    ------
+    ValueError
+        If ``direction`` is not a recognised key in ``_FACTORS``.
+    """
     if direction not in _FACTORS:
         raise ValueError(
             f"Unknown direction '{direction}'. "
@@ -75,6 +94,23 @@ def _get_factor(direction: str) -> float:
 
 
 def _convert_units_dataframe(result: pd.DataFrame, output: str | dict) -> pd.DataFrame:
+    """Apply unit conversion to selected columns of a DataFrame.
+
+    Parameters
+    ----------
+    result : pd.DataFrame
+        DataFrame whose columns are to be converted. Modified in-place.
+    output : str or dict
+        If a ``str``, the corresponding factor from ``_FACTORS`` is applied to
+        all float-typed columns. If a ``dict`` of the form
+        ``{column: direction}``, each named column is scaled by its individual
+        factor.
+
+    Returns
+    -------
+    pd.DataFrame
+        The modified DataFrame with converted column values.
+    """
     if isinstance(output, dict):
         for col, direction in output.items():
             if col in result.columns:
@@ -87,7 +123,22 @@ def _convert_units_dataframe(result: pd.DataFrame, output: str | dict) -> pd.Dat
 
 
 def server_utilization(lambda_target: float, servers: int, mu: float) -> float:
-    """average server utilization ρ = λ/(cμ)"""
+    """Compute the average server utilization ρ = λ / (c·μ).
+
+    Parameters
+    ----------
+    lambda_target : float
+        Arrival rate λ in units per hour.
+    servers : int
+        Number of parallel servers c.
+    mu : float
+        Service rate per server μ in units per hour.
+
+    Returns
+    -------
+    float
+        Server utilization ρ.
+    """
     if servers * mu <= 0:
         raise ValueError("Invalid parameters")
     return lambda_target / (servers * mu)
@@ -104,24 +155,37 @@ def queue_mgc_coop(
     roh_start: Annotated[float, Field(gt=0, lt=1)] = 0.99,
     max_iterations: Annotated[int, Field(gt=10, lt=1000000)] = 1000000,
 ) -> List[float]:
-    """
-    Approximate M/G/c queueing model based on Cooper (1990, p.508, Eq. 9.3).
+    """Approximate M/G/c queueing model based on Cooper (1990, p. 508, Eq. 9.3).
 
     Iteratively determines the maximum arrival rate (λ₀) for a multi-server queue
     such that the mean waiting time does not exceed a target value.
-    The method uses Cooper’s simplified approximation for M/M/1 systems and
+    The method uses Cooper's simplified approximation for M/M/1 systems and
     extends it to M/G/c by applying a correction factor based on the coefficient
     of variation of service times (vₖ).
 
-    :param mean_waiting_time: Target mean waiting time in hours.
-    :param server: Number of parallel servers (charging points).
-    :param mu: Mean service rate per server [1/hours].
-    :param charging_time: Average service (charging) time per customer in hours.
-    :param cv: Coefficient of variation of service times (standard deviation / mean).
-    :param wq_mgc_init: Initial waiting time guess (in hours). Default is 50.
-    :param roh_start: Initial utilization factor (ρ₀), default is 0.99.
-    :return:  list
-        [λmax (1/h), ρ, Wq_MM_c (hours), Wq_MG_c (hours), Wq/ServiceTime ratio]
+    Parameters
+    ----------
+    mean_waiting_time : float
+        Target mean waiting time in hours.
+    server : int
+        Number of parallel servers (charging points).
+    mu : float
+        Mean service rate per server in 1/hours.
+    charging_time : float
+        Average service (charging) time per customer in hours.
+    cv : float
+        Coefficient of variation of service times (standard deviation / mean).
+    wq_mgc_init : float, optional
+        Initial waiting time guess in hours. Default is 50.
+    roh_start : float, optional
+        Initial utilization factor ρ₀. Default is 0.99.
+    max_iterations : int, optional
+        Maximum number of iterations before raising an error. Default is 1,000,000.
+
+    Returns
+    -------
+    list[float]
+        ``[λmax (1/h), ρ, Wq_MM_c (hours), Wq_MG_c (hours), Wq/ServiceTime ratio]``
     """
     # After Cooper 1990 - S.508 - Formel 9.3
 
@@ -160,22 +224,38 @@ def queue_mgc_Adan_Resing_old(
     wq_mgc_init: Annotated[float, Field(gt=1)] = 50,
     roh_start: Annotated[float, Field(gt=0, lt=1)] = 0.99,
 ):
-    """
-    Warteschlangenmodell im M/G/c-System nach Adan & Resing (2017)
+    """M/G/c queueing model based on Adan & Resing (2017).
 
-    Approximierung nach Funke 2018 - https://urn.fi/urn:nbn:de:hebis:34-2018041155288 ⎘
+    Approximation following Funke (2018):
+    https://urn.fi/urn:nbn:de:hebis:34-2018041155288
 
-    Jedoch falsche Implementierung wq_part2 ist die Summenberechung falsch, sie summiert fälschlicherweise auch den
-    letzten Term mit und der Range ist um -1 zu kurz
-    :param mean_waiting_time: Target mean waiting time in hours.
-    :param server: Number of parallel servers (charging points).
-    :param mu: Mean service rate per server [1/hours]
-    :param charging_time: Average service (charging) time per customer in hours
-    :param cv: Coefficient of variation of service times (standard deviation / mean)
-    :param wq_mgc_init: Initial waiting time guess (in hours). Default is 50
-    :param roh_start: Initial utilization factor (ρ₀), default is 0.99.
-    :return: list
-        [λmax (1/h), ρ, Wq_MM_c (hours), Wq_MG_c (hours), Wq/ServiceTime ratio]
+    .. warning::
+        This implementation contains a known bug: ``wq_part2`` incorrectly
+        includes the last term in the summation, and the range is one step too
+        short. The function is retained for backward compatibility and
+        comparability purposes only.
+
+    Parameters
+    ----------
+    mean_waiting_time : float
+        Target mean waiting time in hours.
+    server : int
+        Number of parallel servers (charging points).
+    mu : float
+        Mean service rate per server in 1/hours.
+    charging_time : float
+        Average service (charging) time per customer in hours.
+    cv : float
+        Coefficient of variation of service times (standard deviation / mean).
+    wq_mgc_init : float, optional
+        Initial waiting time guess in hours. Default is 50.
+    roh_start : float, optional
+        Initial utilization factor ρ₀. Default is 0.99.
+
+    Returns
+    -------
+    list[float]
+        ``[λmax (1/h), ρ, Wq_MM_c (hours), Wq_MG_c (hours), Wq/ServiceTime ratio]``
     """
     # Adan_Resing
     wq_mgc = wq_mgc_init
@@ -213,7 +293,18 @@ def queue_mgc_Adan_Resing_old(
 
 
 def _logsumexp(values: List[float]) -> float:
-    """Numerisch stabile Berechnung von log(sum(exp(values)))."""
+    """Compute log(sum(exp(values))) in a numerically stable way.
+
+    Parameters
+    ----------
+    values : list[float]
+        Input values.
+
+    Returns
+    -------
+    float
+        log-sum-exp result.
+    """
     m = max(values)
     if not math.isfinite(m):
         return float("inf")
@@ -221,13 +312,24 @@ def _logsumexp(values: List[float]) -> float:
 
 
 def _erlang_c_prob_wait(c: int, rho: float) -> float:
-    """
-    Numerisch stabile Berechnung der Erlang-C Wartwahrscheinlichkeit P_wait
-    für ein M/M/c-System.
-    Nutzt Logspace + lgamma zur Stabilisierung.
+    """Compute the Erlang-C waiting probability P_wait for an M/M/c system.
+
+    Uses log-space arithmetic and ``lgamma`` for numerical stability.
+
+    Parameters
+    ----------
+    c : int
+        Number of servers.
+    rho : float
+        Server utilization ρ = λ / (c·μ). Must satisfy 0 ≤ ρ < 1.
+
+    Returns
+    -------
+    float
+        Probability that an arriving customer has to wait, P_wait ∈ [0, 1].
     """
     if c == 1:
-        return rho  # M/M/1-Spezialfall: P_wait = rho
+        return rho  # M/M/1 special case: P_wait = rho
 
     if rho <= 0:
         return 0.0
@@ -237,17 +339,17 @@ def _erlang_c_prob_wait(c: int, rho: float) -> float:
     cr = c * rho
     log_cr = math.log(cr)
 
-    # log(a_n) = n*log(cr) - log(n!) für n = 0..c-1
+    # log(a_n) = n*log(cr) - log(n!) for n = 0..c-1
     log_a = [(n * log_cr) - math.lgamma(n + 1) for n in range(0, c)]
     log_sum_terms = _logsumexp(log_a)
 
     # log(a_c)
     log_a_c = c * log_cr - math.lgamma(c + 1)
 
-    # ratio = ((1-rho)*sum_terms) / a_c  im Logspace
+    # ratio = ((1-rho)*sum_terms) / a_c  in log-space
     log_ratio = math.log1p(-rho) + log_sum_terms - log_a_c
 
-    # Stabilisierung gegen extreme Werte
+    # Guard against extreme values
     if log_ratio > 700:  # exp(700) ~ 1e304
         return 0.0
     if log_ratio < -700:  # exp(-700) ~ 0
@@ -258,16 +360,28 @@ def _erlang_c_prob_wait(c: int, rho: float) -> float:
 
 
 def _compute_wq_for_lambda(
-    lmbda: float, c: int, mu: float, charging_time_hours: float, cv: float
+    lmbda: float, c: int, mu: float, charging_time: float, cv: float
 ) -> Tuple[float, float, float]:
-    """
-    Berechne roh, Wq_MM_c (in Hours) und Wq_MGc (in Hours)
-    für eine gegebene Ankunftsrate λ.
+    """Compute ρ, Wq_MM_c, and Wq_MG_c (all in hours) for a given arrival rate λ.
 
-    charging_time_hours: Bedienzeit *in Stunden*
-    mu: Service rate pro Server = 1 / (charging_time_in_hours)
-    """
+    Parameters
+    ----------
+    lmbda : float
+        Arrival rate λ in 1/hours.
+    c : int
+        Number of servers.
+    mu : float
+        Service rate per server in 1/hours, i.e. ``1 / charging_time``.
+    charging_time : float
+        Mean service time in hours.
+    cv : float
+        Coefficient of variation of service times (standard deviation / mean).
 
+    Returns
+    -------
+    tuple[float, float, float]
+        ``(ρ, Wq_MM_c [hours], Wq_MG_c [hours])``
+    """
     if lmbda <= 0:
         return 0.0, 0.0, 0.0
 
@@ -277,28 +391,28 @@ def _compute_wq_for_lambda(
         return roh, float("inf"), float("inf")
 
     # -----------------------------
-    # M/G/1 Fall
+    # M/G/1 special case
     # -----------------------------
     if c == 1:
-        E_S = charging_time_hours
+        E_S = charging_time
         E_S2 = E_S * E_S * (1 + cv * cv)
-        wq_hours = (lmbda * E_S2) / (2 * (1 - roh))
-        wq_mgc_hours = wq_hours
-        return roh, wq_hours, wq_mgc_hours
+        wq = (lmbda * E_S2) / (2 * (1 - roh))
+        wq_mgc = wq
+        return roh, wq, wq_mgc
 
     # -----------------------------
-    # M/M/c Basis
+    # M/M/c base
     # -----------------------------
     P_wait = _erlang_c_prob_wait(c, roh)
     denom = c * mu * (1 - roh)
-    wq_hours = P_wait / denom
+    wq_mmc = P_wait / denom
 
     # -----------------------------
-    # M/G/c (Funke) Approximation
+    # M/G/c (Funke) approximation
     # -----------------------------
-    wq_mgc_hours = wq_hours * ((1 + cv * cv) / 2.0)
+    wq_mgc = wq_mmc * ((1 + cv * cv) / 2.0)
 
-    return roh, wq_hours, wq_mgc_hours
+    return roh, wq_mmc, wq_mgc
 
 
 @validate_call
@@ -312,21 +426,38 @@ def queue_mgc_Adan_Resing_stable(
     tol_minutes: Annotated[float, Field(gt=0)] = 1e-5,
     max_iter: Annotated[int, Field(gt=10, lt=1000000)] = 80,
 ) -> List[float]:
+    """Numerically stable M/G/c approximation via binary search on λ.
+
+    Determines the maximum arrival rate λ for a target mean waiting time using
+    a bisection approach. Internally delegates waiting-time evaluation to
+    :func:`_compute_wq_for_lambda`, which applies the Erlang-C formula for the
+    M/M/c base and the Funke/Adan–Resing correction for M/G/c.
+
+    Parameters
+    ----------
+    mean_waiting_time : float
+        Target mean waiting time in hours.
+    server : int
+        Number of parallel servers c.
+    mu : float
+        Mean service rate per server in 1/hours.
+    charging_time : float
+        Mean service (charging) time per customer in hours.
+    cv : float
+        Coefficient of variation of service times (standard deviation / mean).
+    roh_start : float, optional
+        Initial upper utilization bound ρ₀ (< 1). Default is 0.999999.
+    tol_minutes : float, optional
+        Convergence tolerance on the waiting time. Default is 1e-5.
+    max_iter : int, optional
+        Maximum number of bisection iterations. Default is 80.
+
+    Returns
+    -------
+    list[float]
+        ``[λmax (1/h), ρ, Wq_MM_c (hours), Wq_MG_c (hours), Wq/ServiceTime ratio]``
     """
-    Stabil berechnete maximale Ankunftsrate lambda für eine Zielwartezeit
-    (mean_waiting_time in Minuten).
-
-    Parameter:
-    - mean_waiting_time (hours)
-    - server = c (Anzahl Server)
-    - charging_time (hours)
-    - cv = Variationskoeffizient
-
-    Rückgabe: List
-    [λmax (1/h), ρ, Wq_MM_c (hours), Wq_MG_c (hours), Wq/ServiceTime ratio]
-    """
-
-    # Obergrenze für λ: systemstabil knapp unter c*mu
+    # Upper bound for λ: system stable just below c*mu
     lambda_max = server * mu * roh_start
     lambda_low = 0.0
 
@@ -358,7 +489,7 @@ def queue_mgc_Adan_Resing_stable(
         if lambda_max - lambda_low < 1e-12:
             break
 
-    # Verhältnis Warten/Bedienen
+    # Ratio waiting time / service time
     wz_az = best_wq_mgc / charging_time
 
     if best_lambda == 0.0 and mean_waiting_time > 0:
@@ -390,36 +521,32 @@ def que_mgc(
         default_factory=lambda: list(_DEFAULT_TIME_COLS)
     ),  # noqa
 ) -> pd.DataFrame:
-    """
-    Calculates the maximum arrival rate for various server counts in a queueing model using different methods.
+    """Compute the maximum arrival rate across server counts for an M/G/c queue.
 
-    This function iterates through a range of server counts and calculates the optimal arrival rate (lambda), traffic intensity (roh),
-    average waiting time (wq), maximum queue length (wq_mgc), and other statistics based on the specified method.
-
-        Parameters
-    ----------
-    lambda_target : float
-        Target arrival rate (λ) in units per hour.
-
+    Iterates over server counts from 1 to ``max_server`` and computes the
+    maximum feasible arrival rate λ, traffic intensity ρ, mean waiting times,
+    and the waiting-to-service-time ratio for each count.
 
     Parameters
     ----------
-    charging_time: float
-        Average service time in hours
-    stdev_ct: float
-        Standard deviation of the service time in hours
-    mean_waiting_time: float
-        Target average waiting time in hours for the system
-    max_server: int
-        Maximum number of servers to consider (default is 1000)
-    method: str
-        Method to use for calculating maximum arrival rate ('coop', 'adan', or 'adan_old')
-    output_unit: Literal["hours_to_minutes", "hours_to_seconds", "hours_to_days"] | None
-        Specifies if to convert hours in other time units or keep the hour unit
-    output_cols: list[str] | None
-        Specifies which columns should be converted
+    charging_time : float
+        Mean service (charging) time in hours.
+    stdev_ct : float
+        Standard deviation of the service time in hours.
+    mean_waiting_time : float
+        Target mean waiting time in hours.
+    max_server : int
+        Maximum number of servers to evaluate.
+    method : {'coop', 'adan', 'adan_old'}
+        Queueing approximation method to use.
+    output_unit : {'hours_to_minutes', 'hours_to_seconds', 'hours_to_days'} or None, optional
+        Time unit for output columns. ``None`` keeps hours. Default is
+        ``'hours_to_minutes'``.
+    output_cols : list[str] or None, optional
+        Columns to apply the unit conversion to. Default is
+        ``['wq_mmc', 'wq_mgc']``.
 
-     Unit Handling
+    Unit Handling
     -------------
     Each time parameter can be provided in either minutes or hours.
     Exactly one variant must be given per parameter:
@@ -431,16 +558,17 @@ def que_mgc(
     +----------------------+---------------------+
     | stdev_ct_min         | stdev_ct_hours      |
     +----------------------+---------------------+
-    | waiting_times_min    | waiting_times_hours |
+    | mean_waiting_time_min|mean_waiting_time_hours|
     +----------------------+---------------------+
+
+    If the parameter is not specified the default of the function is used
 
     Returns
     -------
     pd.DataFrame
-        containing the calculated parameters for each server count, including the number of servers,
-      λmax (1/h), ρ, Wq_MM_c (hours), Wq_MG_c (hours), Wq/ServiceTime ratio
+        One row per server count with columns
+        ``['servers', 'lambda', 'roh', 'wq_mmc', 'wq_mgc', 'wz/az']``.
     """
-
     dict_method = {
         "coop": queue_mgc_coop,
         "adan_old": queue_mgc_Adan_Resing_old,
@@ -495,25 +623,56 @@ def que_mgc_server_wq(
         Literal["hours_to_minutes", "hours_to_seconds", "hours_to_days"] | None
     ) = "hours_to_minutes",
 ) -> tuple:
+    """Determine the minimum number of servers required to handle a target arrival rate
+    under various mean waiting-time constraints.
+
+    For each waiting-time target in ``waiting_times``, finds the smallest server
+    count c such that the system can stably process ``lambda_target`` arrivals per
+    hour while keeping the mean waiting time at or below the specified target.
+    The search increments c from 1 upward and stops as soon as the maximum
+    feasible arrival rate λ_max(c) first exceeds ``lambda_target``.
+    Parameters
+    ----------
+    lambda_target : float
+        Target arrival rate λ in units per hour.
+    charging_time : float
+        Mean service (charging) time in hours.
+    stdev_ct : float
+        Standard deviation of the service time in hours.
+    waiting_times : list[float]
+        Target mean waiting times in hours to evaluate.
+    method : {'coop', 'adan', 'adan_old'}
+        Queueing approximation method to use.
+    max_server : int, optional
+        Maximum number of servers to consider. Default is 1000.
+    output_unit : {'hours_to_minutes', 'hours_to_seconds', 'hours_to_days'} or None, optional
+        Time unit for the waiting-time keys in the returned dictionary.
+        ``None`` keeps hours. Default is ``'hours_to_minutes'``.
+
+    Unit Handling
+    -------------
+    Each time parameter can be provided in either minutes or hours:
+    +----------------------+---------------------+
+    | Minutes (int)        | Hours (float)       |
+    +======================+=====================+
+    | charging_time_min    | charging_time_hours |
+    +----------------------+---------------------+
+    | stdev_ct_min         | stdev_ct_hours      |
+    +----------------------+---------------------+
+    | waiting_times_min    | waiting_times_hours |
+    +----------------------+---------------------+
+    | lambda_target_min    | lambda_target_hours |
+    +----------------------+---------------------+
+
+    If the parameter is not specified the default of the function is used
+
+    Returns
+    -------
+    tuple
+        ``(lambda_target, dict_server_wq)`` where ``dict_server_wq`` maps
+        each mean waiting time (in ``output_unit``) to the minimum required
+        number of servers.
     """
-    Determines the number of servers required to meet a target arrival rate for various mean waiting times.
-
-    This function iterates through different waiting times and calculates the optimal number of servers needed based on
-    the specified method (e.g., Cooper or Adan-Resing). It returns a dictionary mapping each waiting time to the
-    corresponding number of servers required to achieve an arrival rate less than or equal to the target.
-
-    Parameters:
-    - lambda_target: Target arrival rate (lambda) in units per hour
-    - charging_time: Average service time in hours
-    - stdev_ct: Standard deviation of the service time in hours
-    - waiting_times: List of mean waiting times in hours for which the number of servers is to be determined
-    - method: Method to use for calculating optimal server count ('coop' or 'adan')
-    - max_server: Maximum number of servers to consider (default is 1000)
-
-    Returns:
-    - Tuple containing the target arrival rate and a dictionary mapping each mean waiting time to the corresponding number of servers.
-    """
-
     dict_method = {
         "coop": queue_mgc_coop,
         "adan_old": queue_mgc_Adan_Resing_old,
@@ -541,7 +700,7 @@ def que_mgc_server_wq(
                 chosen_server = server
                 break
 
-        # Unit Conversion
+        # Unit conversion
         if output_unit is not None:
             factor = _FACTORS[output_unit]
             mean_waiting_time = mean_waiting_time * factor
@@ -570,6 +729,49 @@ def queue_wq_roh_coop(
         default_factory=lambda: list(_DEFAULT_TIME_COLS)
     ),  # noqa
 ) -> pd.DataFrame:
+    """Compute M/G/c waiting times over a range of utilization values (Cooper).
+
+    For each utilization value ρ in ``roh_range``, calculates λ, Wq_MM_c,
+    Wq_MG_c, and the Wq/service-time ratio using the Cooper approximation.
+    Iteration stops early once ρ ≥ 1.
+
+    Parameters
+    ----------
+    roh_range : list[float]
+        Sequence of utilization values ρ to evaluate. Must be ≥ 0.
+    server : int
+        Number of parallel servers c.
+    charging_time : float
+        Mean service (charging) time in hours.
+    stdev_ct : float
+        Standard deviation of the service time in hours.
+    output_unit : {'hours_to_minutes', 'hours_to_seconds', 'hours_to_days'} or None, optional
+        Time unit for output columns. ``None`` keeps hours. Default is
+        ``'hours_to_minutes'``.
+    output_cols : list[str] or None, optional
+        Columns to apply the unit conversion to. Default is
+        ``['wq_mmc', 'wq_mgc']``.
+
+    Unit Handling
+    -------------
+    Each time parameter can be provided in either minutes or hours:
+    +----------------------+---------------------+
+    | Minutes (int)        | Hours (float)       |
+    +======================+=====================+
+    | charging_time_min    | charging_time_hours |
+    +----------------------+---------------------+
+    | stdev_ct_min         | stdev_ct_hours      |
+    +----------------------+---------------------+
+
+    If the parameter is not specified the default of the function is used
+
+    Returns
+    -------
+    pd.DataFrame
+        One row per ρ value with columns
+        ``['lambda', 'server', 'roh', 'wq_mmc', 'wq_mgc', 'wz/az', 'krit_wert']``,
+        cast to ``float``.
+    """
     queue = pd.DataFrame(
         columns=["lambda", "server", "roh", "wq_mmc", "wq_mgc", "wz/az", "krit_wert"]
     )
@@ -614,14 +816,48 @@ def queue_wq_roh_coop(
 
 
 def _qed_servers(lambda_rate, mu, beta=1.0):
-    """
-    QED (Halfin–Whitt) square-root staffing rule
+    """Compute the initial server count using the QED (Halfin–Whitt) staffing rule.
+
+    Applies the square-root staffing formula:
+    c ≈ R + β·√R, where R = λ / μ is the offered load.
+
+    Parameters
+    ----------
+    lambda_rate : float
+        Arrival rate λ in 1/hours.
+    mu : float
+        Service rate per server μ in 1/hours.
+    beta : float, optional
+        QED quality parameter. Default is 1.0.
+
+    Returns
+    -------
+    int
+        Ceiling of the staffing estimate.
     """
     R = lambda_rate / mu
     return math.ceil(R + beta * math.sqrt(R))
 
 
 def _auto_search_radius(lambda_target, mu):
+    """Derive an automatic server search radius from the offered load.
+
+    Computes a heuristic search window around the QED initial server estimate
+    based on the square root of the offered load R = λ / μ. The radius grows
+    with R to ensure the local search remains comprehensive as load increases.
+
+    Parameters
+    ----------
+    lambda_target : float
+        Target arrival rate λ in 1/hours.
+    mu : float
+        Service rate per server μ in 1/hours.
+
+    Returns
+    -------
+    int
+        Search radius, at least 5 and otherwise ``round(2 · √R)``.
+    """
     R = lambda_target / mu
     search_radius = int(round(max(5, 2 * math.sqrt(R)), 0))
     return search_radius
@@ -649,73 +885,65 @@ def que_mgc_server_wq_qed(
         Literal["hours_to_minutes", "hours_to_seconds", "hours_to_days"] | None
     ) = "hours_to_minutes",
 ) -> tuple:
-    """
-    Determines the required number of servers in an M/G/c queue to serve a target
-    arrival rate under mean waiting-time constraints, with optional QED staffing.
+    """Determine required server counts via QED-guided search for an M/G/c queue.
 
-    For each target mean waiting time, the function determines the smallest number
-    of servers that:
-      (i) can stably serve the target arrival rate, and
-      (ii) satisfies the specified mean waiting-time constraint.
-
-    The underlying waiting-time evaluation is based on an M/G/c approximation
-    (e.g., Cooper or Adan–Resing / Funke). When beta > 0, the search is initialized
-    according to the QED (Halfin–Whitt) staffing rule
-        c ≈ R + beta * sqrt(R),
-    where R = lambda_target / mu is the offered load. The final result, however,
-    is determined by feasibility with respect to the waiting-time constraint.
+    For each target mean waiting time, finds the smallest number of servers that
+    can stably serve ``lambda_target`` and satisfies the waiting-time constraint.
+    The search is initialized using the QED (Halfin–Whitt) square-root staffing
+    rule c ≈ R + β·√R, with R = λ / μ.
 
     Parameters
     ----------
     lambda_target : float
-        Target arrival rate (λ) in units per hour.
-
+        Target arrival rate λ in units per hour.
     charging_time : float
         Mean service (charging) time in hours.
-
     stdev_ct : float
         Standard deviation of the service (charging) time in hours.
-
     waiting_times : list[float]
-        List of target mean waiting times (in hours) for which the required
-        number of servers is to be determined.
-
-    method : str
+        Target mean waiting times in hours for which the required server count
+        is to be determined.
+    method : {'coop', 'adan', 'adan_old'}
         Queueing approximation used to evaluate mean waiting times.
-        Supported options include, for example:
-        - 'coop'  : Cooper (1981) M/G/c approximation
-        - 'adan'  : Adan & Resing (2017) / Funke (2018) approximation
-        - 'adan_old': Adan & Resing (2017) / Funke (2018) approximation with bug in sum_term, kept for comparability
-
+        ``'adan_old'`` retains a known summation bug for comparability.
     beta : float, optional
-        QED (Halfin–Whitt) quality parameter controlling the amount of safety
-        capacity. beta = 0 corresponds to efficiency-driven staffing, while
-        beta > 0 introduces additional capacity to improve service quality
-        and robustness to variability (default is 1.0).
-
-    search_radius : int, optional
-        Numerical search window around the initial server estimate.
-        This parameter is used for computational efficiency only and has
-        no queueing-theoretic interpretation (default is 10).
-
+        QED quality parameter. ``beta = 0`` corresponds to efficiency-driven
+        staffing; higher values add safety capacity. Default is 1.0.
+    search_radius : int or None, optional
+        Search window around the QED initial estimate. Used for computational
+        efficiency only and has no queueing-theoretic interpretation. If
+        ``None``, an automatic radius is derived from the offered load.
     max_server : int, optional
-        Maximum number of servers considered in the search (default is 1000).
+        Maximum number of servers considered in the search. Default is 1000.
+    output_unit : {'hours_to_minutes', 'hours_to_seconds', 'hours_to_days'} or None, optional
+        Time unit for the waiting-time keys in the returned dictionary.
+        ``None`` keeps hours. Default is ``'hours_to_minutes'``.
 
-    output_unit : Literal["hours_to_minutes", "hours_to_seconds", "hours_to_days"] | None, optional
-        Specifies if to convert hours in other time units or keep the hour unit
+    Unit Handling
+    -------------
+    Each time parameter can be provided in either minutes or hours:
+    +----------------------+---------------------+
+    | Minutes (int)        | Hours (float)       |
+    +======================+=====================+
+    | charging_time_min    | charging_time_hours |
+    +----------------------+---------------------+
+    | stdev_ct_min         | stdev_ct_hours      |
+    +----------------------+---------------------+
+    | waiting_times_min    | waiting_times_hours |
+    +----------------------+---------------------+
+    | lambda_target_min    | lambda_target_hours |
+    +----------------------+---------------------+
+
+    If the parameter is not specified the default of the function is used
 
     Returns
     -------
     tuple
-        A tuple consisting of:
-        - lambda_target : float
-            The target arrival rate.
-        - dict_server_wq : dict
-            Dictionary mapping each target mean waiting time in output unit
-            to the corresponding required number of servers. If no feasible
-            solution is found within the search range, the value is None.
+        ``(lambda_target, dict_server_wq)`` where ``dict_server_wq`` maps each
+        target mean waiting time (in ``output_unit``) to the minimum feasible
+        server count, or ``None`` if no solution was found within the search
+        range.
     """
-
     dict_method = {
         "coop": queue_mgc_coop,
         "adan_old": queue_mgc_Adan_Resing_old,
@@ -729,7 +957,7 @@ def que_mgc_server_wq_qed(
     mu = 1 / charging_time
     cv = stdev_ct_h / charging_time
 
-    # minimum server count for stability
+    # Minimum server count for stability
     min_stable_servers = math.ceil(lambda_target / mu)
 
     if search_radius is None:
@@ -747,14 +975,13 @@ def que_mgc_server_wq_qed(
         # --- Local search around QED (full search, no early break) ---
         feasible_servers = []
 
-        # --- local search around QED ---
         for server in range(search_start, search_end + 1):
 
             lambda_max, roh_max, wq_mm_c, wq_mg_c, wz_az = method(
                 mean_waiting_time, server, mu, charging_time, cv
             )
 
-            # Server feasible if it can serve lambda_target and meets waiting time
+            # Server is feasible if it can serve lambda_target and meets waiting time
             if lambda_max >= lambda_target:
                 feasible_servers.append(server)
 
@@ -767,7 +994,7 @@ def que_mgc_server_wq_qed(
                 f"Warning: No server satisfies target Wq={mean_waiting_time} h at λ={lambda_target} h⁻¹"
             )
 
-        # Unit Conversion
+        # Unit conversion
         if output_unit is not None:
             factor = _FACTORS[output_unit]
             mean_waiting_time = mean_waiting_time * factor
