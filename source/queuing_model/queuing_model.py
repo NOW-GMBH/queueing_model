@@ -2,6 +2,88 @@ import pandas as pd
 import math
 from typing import Tuple, List, Literal, Annotated
 from pydantic import Field, validate_call
+from functools import wraps
+
+_FACTORS = {"hours_to_minutes": 60, "hours_to_seconds": 3600, "hours_to_days": 1 / 24}
+_MINUTES_TO_HOURS = 1 / 60
+_PER_MINUTE_TO_HOURS = 60
+_DEFAULT_TIME_COLS = ["wq_mmc", "wq_mgc"]
+
+
+def convert_units(
+    time_map: dict = None,
+    rate_map: dict = None,
+):
+    """Convert units for function inputs and outputs.
+
+    Parameters
+    ----------
+    time_map : dict, optional
+        ``{minutes_kwarg: (hours_kwarg, target_kwarg)}`` — if the caller
+        provides ``minutes_kwarg``, it is converted to hours and passed as
+        ``target_kwarg``. If ``hours_kwarg`` is provided instead, it is
+        passed as ``target_kwarg`` unchanged. List values are supported,
+        factor is applied element-wise.
+    rate_map : dict, optional
+        ``{per_min_kwarg: (per_hour_kwarg, target_kwarg)}`` — if the caller
+        provides ``per_min_kwarg``, it is converted to per hour (*60) and
+        passed as ``target_kwarg``. If ``per_hour_kwarg`` is provided instead,
+        it is passed as ``target_kwarg`` unchanged.
+    """
+
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            # Duration conversion: minutes → hours
+            if time_map:
+                for min_key, (hours_key, target_key) in time_map.items():
+                    if min_key in kwargs:
+                        v = kwargs.pop(min_key)
+                        kwargs[target_key] = (
+                            [x * _MINUTES_TO_HOURS for x in v]
+                            if isinstance(v, list)
+                            else v * _MINUTES_TO_HOURS
+                        )
+                    elif hours_key in kwargs:
+                        kwargs[target_key] = kwargs.pop(hours_key)
+
+            # Rate conversion: per minute → per hour
+            if rate_map:
+                for min_key, (hours_key, target_key) in rate_map.items():
+                    if min_key in kwargs:
+                        v = kwargs.pop(min_key)
+                        kwargs[target_key] = v * _PER_MINUTE_TO_HOURS
+                    elif hours_key in kwargs:
+                        kwargs[target_key] = kwargs.pop(hours_key)
+
+            result = func(*args, **kwargs)
+
+            return result
+
+        return wrapper
+
+    return decorator
+
+
+def _get_factor(direction: str) -> float:
+    if direction not in _FACTORS:
+        raise ValueError(
+            f"Unknown direction '{direction}'. "
+            f"Valid options: {set(_FACTORS.keys())}"
+        )
+    return _FACTORS[direction]
+
+
+def _convert_units_dataframe(result: pd.DataFrame, output: str | dict) -> pd.DataFrame:
+    if isinstance(output, dict):
+        for col, direction in output.items():
+            if col in result.columns:
+                result[col] = result[col] * _get_factor(direction)
+    else:
+        float_cols = result.select_dtypes(include="float").columns
+        result[float_cols] = result[float_cols] * _get_factor(output)
+
+    return result
 
 
 def server_utilization(lambda_target: float, servers: int, mu: float) -> float:
@@ -287,13 +369,26 @@ def queue_mgc_Adan_Resing_stable(
     return [best_lambda, best_roh, best_wq, best_wq_mgc, wz_az]
 
 
+@convert_units(
+    time_map={
+        "charging_time_min": ("charging_time_hours", "charging_time"),
+        "stdev_ct_min": ("stdev_ct_hours", "stdev_ct"),
+        "mean_waiting_time_min": ("mean_waiting_time_hours", "mean_waiting_time"),
+    }
+)
 @validate_call
 def que_mgc(
-    charging_time_min: Annotated[int, Field(ge=0)],
-    stdev_ct_min: Annotated[int, Field(ge=0)],
-    mean_waiting_time_min: Annotated[float, Field(gt=0)],
+    charging_time: Annotated[float, Field(ge=0)],
+    stdev_ct: Annotated[float, Field(ge=0)],
+    mean_waiting_time: Annotated[float, Field(gt=0)],
     max_server: Annotated[int, Field(gt=0)],
     method: Literal["coop", "adan", "adan_old"],
+    output_unit: (
+        Literal["hours_to_minutes", "hours_to_seconds", "hours_to_days"] | None
+    ) = "hours_to_minutes",
+    output_cols: list[str] | None = Field(
+        default_factory=lambda: list(_DEFAULT_TIME_COLS)
+    ),  # noqa
 ) -> pd.DataFrame:
     """
     Calculates the maximum arrival rate for various server counts in a queueing model using different methods.
@@ -301,15 +396,48 @@ def que_mgc(
     This function iterates through a range of server counts and calculates the optimal arrival rate (lambda), traffic intensity (roh),
     average waiting time (wq), maximum queue length (wq_mgc), and other statistics based on the specified method.
 
-    Parameters:
-    - charging_time_min: Average service time in minutes
-    - stdev_ct_min: Standard deviation of the service time in minutes
-    - mean_waiting_time: Target average waiting time in minutes for the system
-    - max_server: Maximum number of servers to consider (default is 1000)
-    - method: Method to use for calculating maximum arrival rate ('coop', 'adan', or 'adan_old')
+        Parameters
+    ----------
+    lambda_target : float
+        Target arrival rate (λ) in units per hour.
 
-    Returns:
-    - DataFrame containing the calculated parameters for each server count, including the number of servers,
+
+    Parameters
+    ----------
+    charging_time: float
+        Average service time in hours
+    stdev_ct: float
+        Standard deviation of the service time in hours
+    mean_waiting_time: float
+        Target average waiting time in hours for the system
+    max_server: int
+        Maximum number of servers to consider (default is 1000)
+    method: str
+        Method to use for calculating maximum arrival rate ('coop', 'adan', or 'adan_old')
+    output_unit: Literal["hours_to_minutes", "hours_to_seconds", "hours_to_days"] | None
+        Specifies if to convert hours in other time units or keep the hour unit
+    output_cols: list[str] | None
+        Specifies which columns should be converted
+
+     Unit Handling
+    -------------
+    Each time parameter can be provided in either minutes or hours.
+    Exactly one variant must be given per parameter:
+
+    +----------------------+---------------------+
+    | Minutes (int)        | Hours (float)       |
+    +======================+=====================+
+    | charging_time_min    | charging_time_hours |
+    +----------------------+---------------------+
+    | stdev_ct_min         | stdev_ct_hours      |
+    +----------------------+---------------------+
+    | waiting_times_min    | waiting_times_hours |
+    +----------------------+---------------------+
+
+    Returns
+    -------
+    pd.DataFrame
+        containing the calculated parameters for each server count, including the number of servers,
       λmax (1/h), ρ, Wq_MM_c (hours), Wq_MG_c (hours), Wq/ServiceTime ratio
     """
 
@@ -320,11 +448,8 @@ def que_mgc(
     }
     method = dict_method[method]
 
-    charging_time_h = charging_time_min / 60
-    stdev_ct_h = stdev_ct_min / 60
-    mean_waiting_time_h = mean_waiting_time_min / 60
-    mu = 1 / charging_time_h
-    cv = stdev_ct_h / charging_time_h
+    mu = 1 / charging_time
+    cv = stdev_ct / charging_time
 
     queue = pd.DataFrame(
         0.0,
@@ -335,19 +460,40 @@ def que_mgc(
     for server in range(1, max_server + 1):
         queue.loc[server, ["servers", "lambda", "roh", "wq_mmc", "wq_mgc", "wz/az"]] = [
             server
-        ] + method(mean_waiting_time_h, server, mu, charging_time_h, cv)
+        ] + method(mean_waiting_time, server, mu, charging_time, cv)
+
+    if output_unit is not None:
+        queue = _convert_units_dataframe(
+            queue,
+            output=(
+                output_unit
+                if output_cols is None
+                else {col: output_unit for col in output_cols}
+            ),
+        )
 
     return queue
 
 
+@convert_units(
+    time_map={
+        "charging_time_min": ("charging_time_hours", "charging_time"),
+        "stdev_ct_min": ("stdev_ct_hours", "stdev_ct"),
+        "waiting_times_min": ("waiting_times_hours", "waiting_times"),
+    },
+    rate_map={"lambda_target_min": ("lambda_target_hours", "lambda_target")},
+)
 @validate_call
 def que_mgc_server_wq(
     lambda_target: Annotated[float, Field(gt=0)],
-    charging_time_min: Annotated[int, Field(ge=0)],
-    stdev_ct_min: Annotated[int, Field(ge=0)],
-    waiting_times_min: list[Annotated[float, Field(gt=0)]],
+    charging_time: Annotated[float, Field(ge=0)],
+    stdev_ct: Annotated[float, Field(ge=0)],
+    waiting_times: list[Annotated[float, Field(gt=0)]],
     method: Literal["coop", "adan", "adan_old"],
     max_server: Annotated[int, Field(gt=0)] = 1000,
+    output_unit: (
+        Literal["hours_to_minutes", "hours_to_seconds", "hours_to_days"] | None
+    ) = "hours_to_minutes",
 ) -> tuple:
     """
     Determines the number of servers required to meet a target arrival rate for various mean waiting times.
@@ -358,9 +504,9 @@ def que_mgc_server_wq(
 
     Parameters:
     - lambda_target: Target arrival rate (lambda) in units per hour
-    - charging_time: Average service time in minutes
-    - stdev_ct: Standard deviation of the service time in minutes
-    - waiting_times: List of mean waiting times in minutes for which the number of servers is to be determined
+    - charging_time: Average service time in hours
+    - stdev_ct: Standard deviation of the service time in hours
+    - waiting_times: List of mean waiting times in hours for which the number of servers is to be determined
     - method: Method to use for calculating optimal server count ('coop' or 'adan')
     - max_server: Maximum number of servers to consider (default is 1000)
 
@@ -377,55 +523,67 @@ def que_mgc_server_wq(
 
     dict_server_wq = {}
 
-    charging_time_h = charging_time_min / 60
-    stdev_ct_h = stdev_ct_min / 60
-    mu = 1 / charging_time_h
-    cv = stdev_ct_h / charging_time_h
+    mu = 1 / charging_time
+    cv = stdev_ct / charging_time
 
-    for mean_waiting_time_min in waiting_times_min:
+    for mean_waiting_time in waiting_times:
         chosen_server = None
-        mean_waiting_time_h = mean_waiting_time_min / 60
 
         for server in range(1, max_server + 1):
 
             lambda_max, roh, wq_mmc_h, wq_mgc_h, wz_az = method(
-                mean_waiting_time_h, server, mu, charging_time_h, cv
+                mean_waiting_time, server, mu, charging_time, cv
             )
-            if mean_waiting_time_min > 0 and lambda_max <= 0:
+            if mean_waiting_time > 0 and lambda_max <= 0:
                 continue
 
             if lambda_max > lambda_target:
                 chosen_server = server
                 break
 
-        dict_server_wq[str(mean_waiting_time_min)] = chosen_server
+        # Unit Conversion
+        if output_unit is not None:
+            factor = _FACTORS[output_unit]
+            mean_waiting_time = mean_waiting_time * factor
+
+        dict_server_wq[str(mean_waiting_time)] = chosen_server
 
     return lambda_target, dict_server_wq
 
 
+@convert_units(
+    time_map={
+        "charging_time_min": ("charging_time_hours", "charging_time"),
+        "stdev_ct_min": ("stdev_ct_hours", "stdev_ct"),
+    }
+)
 @validate_call
 def queue_wq_roh_coop(
     roh_range: Annotated[list[float], Field(ge=0)],
     server: Annotated[int, Field(gt=0)],
-    charging_time_min: Annotated[int, Field(ge=0)],
-    stdev_ct_min: Annotated[int, Field(ge=0)],
+    charging_time: Annotated[float, Field(ge=0)],
+    stdev_ct: Annotated[float, Field(ge=0)],
+    output_unit: (
+        Literal["hours_to_minutes", "hours_to_seconds", "hours_to_days"] | None
+    ) = "hours_to_minutes",
+    output_cols: list[str] | None = Field(
+        default_factory=lambda: list(_DEFAULT_TIME_COLS)
+    ),  # noqa
 ) -> pd.DataFrame:
     queue = pd.DataFrame(
         columns=["lambda", "server", "roh", "wq_mmc", "wq_mgc", "wz/az", "krit_wert"]
     )
 
-    charging_time_h = charging_time_min / 60
-    stdev_ct_h = stdev_ct_min / 60
-    mu = 1 / charging_time_h
-    cv = stdev_ct_h / charging_time_h
+    mu = 1 / charging_time
+    cv = stdev_ct / charging_time
 
     for roh in roh_range:
         lambda_value = roh * (server * mu)
 
         if roh < 1:
-            wq_mmc = (roh / (1 - roh)) * (charging_time_h / server)
+            wq_mmc = (roh / (1 - roh)) * (charging_time / server)
             wq_mgc = wq_mmc * ((1 + cv**2) / 2)
-            wz_az = wq_mgc / charging_time_h
+            wz_az = wq_mgc / charging_time
         else:
             break
 
@@ -440,6 +598,16 @@ def queue_wq_roh_coop(
             wq_mgc,
             wz_az,
             lambda_value / server,
+        )
+
+    if output_unit is not None:
+        queue = _convert_units_dataframe(
+            queue,
+            output=(
+                output_unit
+                if output_cols is None
+                else {col: output_unit for col in output_cols}
+            ),
         )
 
     return queue.astype("float")
@@ -459,16 +627,27 @@ def _auto_search_radius(lambda_target, mu):
     return search_radius
 
 
+@convert_units(
+    time_map={
+        "charging_time_min": ("charging_time_hours", "charging_time"),
+        "stdev_ct_min": ("stdev_ct_hours", "stdev_ct"),
+        "waiting_times_min": ("waiting_times_hours", "waiting_times"),
+    },
+    rate_map={"lambda_target_min": ("lambda_target_hours", "lambda_target")},
+)
 @validate_call
 def que_mgc_server_wq_qed(
     lambda_target: Annotated[float, Field(gt=0)],
-    charging_time_min: Annotated[int, Field(gt=0)],
-    stdev_ct_min: Annotated[int, Field(ge=0)],
-    waiting_times_min: list[Annotated[float, Field(ge=0)]],
+    charging_time: Annotated[float, Field(gt=0)],
+    stdev_ct: Annotated[float, Field(ge=0)],
+    waiting_times: list[Annotated[float, Field(ge=0)]],
     method: Literal["coop", "adan", "adan_old"],
     beta: Annotated[float, Field(ge=0)] = 1.0,
     search_radius: Annotated[(int | None), Field(gt=1)] = None,
     max_server: Annotated[int, Field(gt=0)] = 1000,
+    output_unit: (
+        Literal["hours_to_minutes", "hours_to_seconds", "hours_to_days"] | None
+    ) = "hours_to_minutes",
 ) -> tuple:
     """
     Determines the required number of servers in an M/G/c queue to serve a target
@@ -491,14 +670,14 @@ def que_mgc_server_wq_qed(
     lambda_target : float
         Target arrival rate (λ) in units per hour.
 
-    charging_time_min : int
-        Mean service (charging) time in minutes.
+    charging_time : float
+        Mean service (charging) time in hours.
 
-    stdev_ct_min : int
-        Standard deviation of the service (charging) time in minutes.
+    stdev_ct : float
+        Standard deviation of the service (charging) time in hours.
 
-    waiting_times_min : list
-        List of target mean waiting times (in minutes) for which the required
+    waiting_times : list[float]
+        List of target mean waiting times (in hours) for which the required
         number of servers is to be determined.
 
     method : str
@@ -522,6 +701,9 @@ def que_mgc_server_wq_qed(
     max_server : int, optional
         Maximum number of servers considered in the search (default is 1000).
 
+    output_unit : Literal["hours_to_minutes", "hours_to_seconds", "hours_to_days"] | None, optional
+        Specifies if to convert hours in other time units or keep the hour unit
+
     Returns
     -------
     tuple
@@ -529,7 +711,7 @@ def que_mgc_server_wq_qed(
         - lambda_target : float
             The target arrival rate.
         - dict_server_wq : dict
-            Dictionary mapping each target mean waiting time (in minutes)
+            Dictionary mapping each target mean waiting time in output unit
             to the corresponding required number of servers. If no feasible
             solution is found within the search range, the value is None.
     """
@@ -543,10 +725,9 @@ def que_mgc_server_wq_qed(
 
     dict_server_wq = {}
 
-    charging_time_h = charging_time_min / 60
-    stdev_ct_h = stdev_ct_min / 60
-    mu = 1 / charging_time_h
-    cv = stdev_ct_h / charging_time_h
+    stdev_ct_h = stdev_ct / 60
+    mu = 1 / charging_time
+    cv = stdev_ct_h / charging_time
 
     # minimum server count for stability
     min_stable_servers = math.ceil(lambda_target / mu)
@@ -555,8 +736,7 @@ def que_mgc_server_wq_qed(
         search_radius = _auto_search_radius(lambda_target, mu)
         print(f"Auto search_radius = {search_radius:.1f}")
 
-    for mean_waiting_time_min in waiting_times_min:
-        mean_waiting_time_h = mean_waiting_time_min / 60
+    for mean_waiting_time in waiting_times:
 
         # --- QED initial guess ---
         c_qed = _qed_servers(lambda_target, mu, beta)
@@ -571,7 +751,7 @@ def que_mgc_server_wq_qed(
         for server in range(search_start, search_end + 1):
 
             lambda_max, roh_max, wq_mm_c, wq_mg_c, wz_az = method(
-                mean_waiting_time_h, server, mu, charging_time_h, cv
+                mean_waiting_time, server, mu, charging_time, cv
             )
 
             # Server feasible if it can serve lambda_target and meets waiting time
@@ -584,9 +764,13 @@ def que_mgc_server_wq_qed(
         else:
             best_c = None
             print(
-                f"Warning: No server satisfies target Wq={mean_waiting_time_min} min at λ={lambda_target} h⁻¹"
+                f"Warning: No server satisfies target Wq={mean_waiting_time} h at λ={lambda_target} h⁻¹"
             )
 
-        dict_server_wq[str(mean_waiting_time_min)] = best_c
+        # Unit Conversion
+        if output_unit is not None:
+            factor = _FACTORS[output_unit]
+            mean_waiting_time = mean_waiting_time * factor
+        dict_server_wq[str(mean_waiting_time)] = best_c
 
     return lambda_target, dict_server_wq
