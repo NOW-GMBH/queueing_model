@@ -16,7 +16,7 @@ def queue_mgc_coop(
     mean_waiting_time: Annotated[float, Field(ge=0)],
     server: Annotated[int, Field(gt=0)],
     mu: Annotated[float, Field(gt=0)],
-    charging_time: Annotated[float, Field(gt=0)],
+    charging_time: Annotated[float, Field(ge=0)],
     cv: Annotated[float, Field(ge=0)],
     wq_mgc_init: Annotated[float, Field(gt=1)] = 50,
     roh_start: Annotated[float, Field(gt=0, lt=1)] = 0.99,
@@ -73,7 +73,7 @@ def queue_mgc_Adan_Resing_old(
     mean_waiting_time: Annotated[float, Field(ge=0)],
     server: Annotated[int, Field(gt=0)],
     mu: Annotated[float, Field(gt=0)],
-    charging_time: Annotated[float, Field(gt=0)],
+    charging_time: Annotated[float, Field(ge=0)],
     cv: Annotated[float, Field(ge=0)],
     wq_mgc_init: Annotated[float, Field(gt=1)] = 50,
     roh_start: Annotated[float, Field(gt=0, lt=1)] = 0.99,
@@ -224,7 +224,7 @@ def queue_mgc_Adan_Resing_stable(
     mean_waiting_time: Annotated[float, Field(ge=0)],
     server: Annotated[int, Field(gt=0)],
     mu: Annotated[float, Field(gt=0)],
-    charging_time: Annotated[float, Field(gt=0)],
+    charging_time: Annotated[float, Field(ge=0)],
     cv: Annotated[float, Field(ge=0)],
     roh_start: Annotated[float, Field(gt=0, lt=1)] = 0.999999,
     tol_minutes: Annotated[float, Field(gt=0)] = 1e-5,
@@ -289,7 +289,7 @@ def queue_mgc_Adan_Resing_stable(
 
 @validate_call
 def que_mgc(
-    charging_time_min: Annotated[int, Field(gt=0)],
+    charging_time_min: Annotated[int, Field(ge=0)],
     stdev_ct_min: Annotated[int, Field(ge=0)],
     mean_waiting_time_min: Annotated[float, Field(gt=0)],
     max_server: Annotated[int, Field(gt=0)],
@@ -343,9 +343,9 @@ def que_mgc(
 @validate_call
 def que_mgc_server_wq(
     lambda_target: Annotated[float, Field(gt=0)],
-    charging_time_min: Annotated[int, Field(gt=0)],
+    charging_time_min: Annotated[int, Field(ge=0)],
     stdev_ct_min: Annotated[int, Field(ge=0)],
-    waiting_times_min: list[Annotated[int, Field(gt=0)]],
+    waiting_times_min: list[Annotated[float, Field(gt=0)]],
     method: Literal["coop", "adan", "adan_old"],
     max_server: Annotated[int, Field(gt=0)] = 1000,
 ) -> tuple:
@@ -407,7 +407,7 @@ def que_mgc_server_wq(
 def queue_wq_roh_coop(
     roh_range: Annotated[list[float], Field(ge=0)],
     server: Annotated[int, Field(gt=0)],
-    charging_time_min: Annotated[int, Field(gt=0)],
+    charging_time_min: Annotated[int, Field(ge=0)],
     stdev_ct_min: Annotated[int, Field(ge=0)],
 ) -> pd.DataFrame:
     queue = pd.DataFrame(
@@ -464,7 +464,7 @@ def que_mgc_server_wq_qed(
     lambda_target: Annotated[float, Field(gt=0)],
     charging_time_min: Annotated[int, Field(gt=0)],
     stdev_ct_min: Annotated[int, Field(ge=0)],
-    waiting_times_min: list[Annotated[int, Field(gt=0)]],
+    waiting_times_min: list[Annotated[float, Field(ge=0)]],
     method: Literal["coop", "adan", "adan_old"],
     beta: Annotated[float, Field(ge=0)] = 1.0,
     search_radius: Annotated[(int | None), Field(gt=1)] = None,
