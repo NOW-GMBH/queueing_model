@@ -155,13 +155,17 @@ def queue_mgc_coop(
     roh_start: Annotated[float, Field(gt=0, lt=1)] = 0.99,
     max_iterations: Annotated[int, Field(gt=10, lt=1000000)] = 1000000,
 ) -> List[float]:
-    """Approximate M/G/c queueing model based on Cooper (1990, p. 508, Eq. 9.3).
+    """M/G/c waiting-time approximation using the Cooper (1990) M/M/1 extension.
 
-    Iteratively determines the maximum arrival rate (λ₀) for a multi-server queue
-    such that the mean waiting time does not exceed a target value.
-    The method uses Cooper's simplified approximation for M/M/1 systems and
-    extends it to M/G/c by applying a correction factor based on the coefficient
-    of variation of service times (vₖ).
+    Computes the maximum feasible arrival rate λ for a multi-server queue by
+    iteratively reducing λ until the mean waiting time no longer exceeds the
+    target.
+
+    The M/M/1 mean waiting time formula is extended to a multi-server setting
+    and corrected for service-time variability using the Pollaczek–Khinchine
+    (P–K) mean value formula (Pollaczek, 1930; Khinchin, 1932), yielding an
+    approximation of the M/G/c waiting time. The underlying approximation is
+    presented as a practical formula in Cooper (1990, p. 508, Eq. 9.3).
 
     Parameters
     ----------
@@ -187,8 +191,6 @@ def queue_mgc_coop(
     list[float]
         ``[λmax (1/h), ρ, Wq_MM_c (hours), Wq_MG_c (hours), Wq/ServiceTime ratio]``
     """
-    # After Cooper 1990 - S.508 - Formel 9.3
-
     lambda_max = roh_start * (server * mu)
     roh = roh_start
     wq_mmc = 0.0
@@ -215,7 +217,7 @@ def queue_mgc_coop(
 
 
 @validate_call
-def queue_mgc_Adan_Resing_old(
+def queue_mgc_lee_longton_old(
     mean_waiting_time: Annotated[float, Field(ge=0)],
     server: Annotated[int, Field(gt=0)],
     mu: Annotated[float, Field(gt=0)],
@@ -224,16 +226,23 @@ def queue_mgc_Adan_Resing_old(
     wq_mgc_init: Annotated[float, Field(gt=1)] = 50,
     roh_start: Annotated[float, Field(gt=0, lt=1)] = 0.99,
 ):
-    """M/G/c queueing model based on Adan & Resing (2017).
+    """M/G/c waiting-time approximation using the Lee–Longton (1959) scaling factor.
 
-    Approximation following Funke (2018):
-    https://urn.fi/urn:nbn:de:hebis:34-2018041155288
+    Computes the maximum feasible arrival rate λ for a multi-server queue by
+    iteratively reducing λ until the mean waiting time no longer exceeds the
+    target.
+
+    The exact M/M/c waiting time (Erlang-C) is scaled by the factor
+    (1 + cv²) / 2, taken from the Pollaczek–Khinchine formula, to account for
+    the variability of service times in an M/G/c system. This scaling factor
+    originates from Lee and Longton (1959) and has been applied in related
+    contexts by Funke (2018).
 
     .. warning::
         This implementation contains a known bug: ``wq_part2`` incorrectly
         includes the last term in the summation, and the range is one step too
         short. The function is retained for backward compatibility and
-        comparability purposes only.
+        comparability purposes only. Use :func:`queue_mgc_lee_longton` instead.
 
     Parameters
     ----------
@@ -257,7 +266,6 @@ def queue_mgc_Adan_Resing_old(
     list[float]
         ``[λmax (1/h), ρ, Wq_MM_c (hours), Wq_MG_c (hours), Wq/ServiceTime ratio]``
     """
-    # Adan_Resing
     wq_mgc = wq_mgc_init
     lambda_max = roh_start * (server * mu)
 
@@ -408,7 +416,7 @@ def _compute_wq_for_lambda(
     wq_mmc = P_wait / denom
 
     # -----------------------------
-    # M/G/c (Funke) approximation
+    # M/G/c Lee-Longton approximation
     # -----------------------------
     wq_mgc = wq_mmc * ((1 + cv * cv) / 2.0)
 
@@ -416,7 +424,7 @@ def _compute_wq_for_lambda(
 
 
 @validate_call
-def queue_mgc_Adan_Resing_stable(
+def queue_mgc_lee_longton(
     mean_waiting_time: Annotated[float, Field(ge=0)],
     server: Annotated[int, Field(gt=0)],
     mu: Annotated[float, Field(gt=0)],
@@ -426,12 +434,17 @@ def queue_mgc_Adan_Resing_stable(
     tol_minutes: Annotated[float, Field(gt=0)] = 1e-5,
     max_iter: Annotated[int, Field(gt=10, lt=1000000)] = 80,
 ) -> List[float]:
-    """Numerically stable M/G/c approximation via binary search on λ.
+    """Numerically stable M/G/c approximation using the Lee–Longton (1959) scaling factor.
 
     Determines the maximum arrival rate λ for a target mean waiting time using
     a bisection approach. Internally delegates waiting-time evaluation to
     :func:`_compute_wq_for_lambda`, which applies the Erlang-C formula for the
-    M/M/c base and the Funke/Adan–Resing correction for M/G/c.
+    M/M/c base and scales the result by the Lee–Longton factor (1 + cv²) / 2
+    to obtain the M/G/c waiting time.
+
+    Unlike :func:`queue_mgc_lee_longton_old`, this implementation uses a
+    numerically stable Erlang-C computation (log-space arithmetic) and
+    bisection instead of linear step-down iteration.
 
     Parameters
     ----------
@@ -513,7 +526,7 @@ def que_mgc(
     stdev_ct: Annotated[float, Field(ge=0)],
     mean_waiting_time: Annotated[float, Field(gt=0)],
     max_server: Annotated[int, Field(gt=0)],
-    method: Literal["coop", "adan", "adan_old"],
+    method: Literal["coop", "lee_longton", "lee_longton_old"],
     output_unit: (
         Literal["hours_to_minutes", "hours_to_seconds", "hours_to_days"] | None
     ) = "hours_to_minutes",
@@ -537,7 +550,7 @@ def que_mgc(
         Target mean waiting time in hours.
     max_server : int
         Maximum number of servers to evaluate.
-    method : {'coop', 'adan', 'adan_old'}
+    method : {'coop', 'lee_longton', 'lee_longton_old'}
         Queueing approximation method to use.
     output_unit : {'hours_to_minutes', 'hours_to_seconds', 'hours_to_days'} or None, optional
         Time unit for output columns. ``None`` keeps hours. Default is
@@ -551,17 +564,17 @@ def que_mgc(
     Each time parameter can be provided in either minutes or hours.
     Exactly one variant must be given per parameter:
 
-    +----------------------+---------------------+
-    | Minutes (int)        | Hours (float)       |
-    +======================+=====================+
-    | charging_time_min    | charging_time_hours |
-    +----------------------+---------------------+
-    | stdev_ct_min         | stdev_ct_hours      |
-    +----------------------+---------------------+
-    | mean_waiting_time_min|mean_waiting_time_hours|
-    +----------------------+---------------------+
+    +-------------------------+-------------------------+
+    | Minutes                 | Hours                   |
+    +=========================+=========================+
+    | charging_time_min       | charging_time_hours     |
+    +-------------------------+-------------------------+
+    | stdev_ct_min            | stdev_ct_hours          |
+    +-------------------------+-------------------------+
+    | mean_waiting_time_min   | mean_waiting_time_hours |
+    +-------------------------+-------------------------+
 
-    If the parameter is not specified the default of the function is used
+    If the parameter is not specified the default of the function is used.
 
     Returns
     -------
@@ -571,8 +584,8 @@ def que_mgc(
     """
     dict_method = {
         "coop": queue_mgc_coop,
-        "adan_old": queue_mgc_Adan_Resing_old,
-        "adan": queue_mgc_Adan_Resing_stable,
+        "lee_longton_old": queue_mgc_lee_longton_old,
+        "lee_longton": queue_mgc_lee_longton,
     }
     method = dict_method[method]
 
@@ -617,7 +630,7 @@ def que_mgc_server_wq(
     charging_time: Annotated[float, Field(ge=0)],
     stdev_ct: Annotated[float, Field(ge=0)],
     waiting_times: list[Annotated[float, Field(gt=0)]],
-    method: Literal["coop", "adan", "adan_old"],
+    method: Literal["coop", "lee_longton", "lee_longton_old"],
     max_server: Annotated[int, Field(gt=0)] = 1000,
     output_unit: (
         Literal["hours_to_minutes", "hours_to_seconds", "hours_to_days"] | None
@@ -631,6 +644,7 @@ def que_mgc_server_wq(
     hour while keeping the mean waiting time at or below the specified target.
     The search increments c from 1 upward and stops as soon as the maximum
     feasible arrival rate λ_max(c) first exceeds ``lambda_target``.
+
     Parameters
     ----------
     lambda_target : float
@@ -641,7 +655,7 @@ def que_mgc_server_wq(
         Standard deviation of the service time in hours.
     waiting_times : list[float]
         Target mean waiting times in hours to evaluate.
-    method : {'coop', 'adan', 'adan_old'}
+    method : {'coop', 'lee_longton', 'lee_longton_old'}
         Queueing approximation method to use.
     max_server : int, optional
         Maximum number of servers to consider. Default is 1000.
@@ -652,8 +666,9 @@ def que_mgc_server_wq(
     Unit Handling
     -------------
     Each time parameter can be provided in either minutes or hours:
+
     +----------------------+---------------------+
-    | Minutes (int)        | Hours (float)       |
+    | Minutes              | Hours               |
     +======================+=====================+
     | charging_time_min    | charging_time_hours |
     +----------------------+---------------------+
@@ -664,7 +679,7 @@ def que_mgc_server_wq(
     | lambda_target_min    | lambda_target_hours |
     +----------------------+---------------------+
 
-    If the parameter is not specified the default of the function is used
+    If the parameter is not specified the default of the function is used.
 
     Returns
     -------
@@ -675,8 +690,8 @@ def que_mgc_server_wq(
     """
     dict_method = {
         "coop": queue_mgc_coop,
-        "adan_old": queue_mgc_Adan_Resing_old,
-        "adan": queue_mgc_Adan_Resing_stable,
+        "lee_longton_old": queue_mgc_lee_longton_old,
+        "lee_longton": queue_mgc_lee_longton,
     }
     method = dict_method[method]
 
@@ -755,15 +770,16 @@ def queue_wq_roh_coop(
     Unit Handling
     -------------
     Each time parameter can be provided in either minutes or hours:
+
     +----------------------+---------------------+
-    | Minutes (int)        | Hours (float)       |
+    | Minutes              | Hours               |
     +======================+=====================+
     | charging_time_min    | charging_time_hours |
     +----------------------+---------------------+
     | stdev_ct_min         | stdev_ct_hours      |
     +----------------------+---------------------+
 
-    If the parameter is not specified the default of the function is used
+    If the parameter is not specified the default of the function is used.
 
     Returns
     -------
@@ -877,7 +893,7 @@ def que_mgc_server_wq_qed(
     charging_time: Annotated[float, Field(gt=0)],
     stdev_ct: Annotated[float, Field(ge=0)],
     waiting_times: list[Annotated[float, Field(ge=0)]],
-    method: Literal["coop", "adan", "adan_old"],
+    method: Literal["coop", "lee_longton", "lee_longton_old"],
     beta: Annotated[float, Field(ge=0)] = 1.0,
     search_radius: Annotated[(int | None), Field(gt=1)] = None,
     max_server: Annotated[int, Field(gt=0)] = 1000,
@@ -903,9 +919,9 @@ def que_mgc_server_wq_qed(
     waiting_times : list[float]
         Target mean waiting times in hours for which the required server count
         is to be determined.
-    method : {'coop', 'adan', 'adan_old'}
+    method : {'coop', 'lee_longton', 'lee_longton_old'}
         Queueing approximation used to evaluate mean waiting times.
-        ``'adan_old'`` retains a known summation bug for comparability.
+        ``'lee_longton_old'`` retains a known summation bug for comparability.
     beta : float, optional
         QED quality parameter. ``beta = 0`` corresponds to efficiency-driven
         staffing; higher values add safety capacity. Default is 1.0.
@@ -922,8 +938,9 @@ def que_mgc_server_wq_qed(
     Unit Handling
     -------------
     Each time parameter can be provided in either minutes or hours:
+
     +----------------------+---------------------+
-    | Minutes (int)        | Hours (float)       |
+    | Minutes              | Hours               |
     +======================+=====================+
     | charging_time_min    | charging_time_hours |
     +----------------------+---------------------+
@@ -934,7 +951,7 @@ def que_mgc_server_wq_qed(
     | lambda_target_min    | lambda_target_hours |
     +----------------------+---------------------+
 
-    If the parameter is not specified the default of the function is used
+    If the parameter is not specified the default of the function is used.
 
     Returns
     -------
@@ -946,8 +963,8 @@ def que_mgc_server_wq_qed(
     """
     dict_method = {
         "coop": queue_mgc_coop,
-        "adan_old": queue_mgc_Adan_Resing_old,
-        "adan": queue_mgc_Adan_Resing_stable,
+        "lee_longton_old": queue_mgc_lee_longton_old,
+        "lee_longton": queue_mgc_lee_longton,
     }
     method = dict_method[method]
 
