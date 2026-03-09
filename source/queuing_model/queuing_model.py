@@ -259,6 +259,7 @@ def _erlang_c_prob_wait(c: int, rho: float) -> float:
 
     Uses log-space arithmetic and ``lgamma`` for numerical stability.
 
+
     Parameters
     ----------
     c : int
@@ -270,6 +271,12 @@ def _erlang_c_prob_wait(c: int, rho: float) -> float:
     -------
     float
         Probability that an arriving customer has to wait, P_wait ∈ [0, 1].
+
+    References
+    ----------
+    Erlang, A. K. (1917). Solution of Some Problems in the Theory of Probabilities
+    of Significance in Automatic Telephone Exchanges.
+    Post Office Electrical Engineers Journal, 10, 189–197.
     """
     if c == 1:
         return rho  # M/M/1 special case: P_wait = rho
@@ -312,8 +319,10 @@ def _compute_wq_for_lambda(
 ) -> Tuple[float, float, float]:
     """Compute ρ, Wq_MM_c, and Wq_GI_G_c or Wq_MG_c (c_a² = 1.0) for a given arrival rate λ.
 
-    For c_a² > 1
-    For c_a² = 1.0 (Poisson arrivals) this function computes the waiting times in a M/G/c system.
+    Evaluates the waiting time for a given λ using either the exact M/G/1
+    Pollaczek–Khinchine formula (c=1) or the Erlang-C based multi-server
+    approximation (c>1). The scaling factor (c_a² + c_s²) / 2 generalises
+    to Allen-Cunneen (c_a² ≠ 1.0) and reduces to Lee-Longton (c_a² = 1.0).
 
     Parameters
     ----------
@@ -335,6 +344,19 @@ def _compute_wq_for_lambda(
     -------
     tuple[float, float, float]
         ``(ρ, Wq_MM_c [hours], Wq_GI_G_c [hours])``
+
+    References
+    ----------
+    Pollaczek, F. (1930). Über eine Aufgabe der Wahrscheinlichkeitstheorie. I
+        Mathematische Zeitschrift, 32, 64–100. (M/G/1 waiting time, c=1.)
+    Erlang, A. K. (1917). Solution of Some Problems in the Theory of Probabilities
+        of Significance in Automatic Telephone Exchanges.
+        Post Office Electrical Engineers Journal, 10, 189–197.
+        (Erlang-C base, c>1.)
+    Lee, A. M., & Longton, P. A. (1959). Queueing Processes Associated with Airline Passenger Check-in.
+        Journal of the Operational Research Society, 10(1), 56–71. (Scaling factor for c_a²=1.0.)
+    Allen, A. О. (1990), Probability, Statistics and Queueing Theory, with Computer Science Applications,
+        2nd ed., Academic Press, Boston. (Scaling factor for c_a²≠1.0.)
     """
     if lmbda <= 0:
         return 0.0, 0.0, 0.0
@@ -464,11 +486,11 @@ def queue_mgc_lee_longton(
     tol_minutes: Annotated[float, Field(gt=0)] = 1e-5,
     max_iter: Annotated[int, Field(gt=10, lt=1000000)] = 80,
 ) -> List[float]:
-    """Numerically stable M/G/c approximation using the Lee–Longton (1959) scaling factor.
+    """Numerically stable M/G/c approximation using the approximation by Lee–Longton (1959).
 
     Determines the maximum arrival rate λ for a target mean waiting time using
-    a bisection approach. Scales the exact M/M/c (Erlang-C) waiting time by
-    the Lee–Longton factor (1 + cv²) / 2 to approximate the M/G/c waiting time.
+    a bisection approach. Scales the exact M/M/c (Erlang-C) waiting time by (1 + cv²) / 2 from the
+    the Pollaczek–Khinchine formula to approximate the M/G/c waiting time.
 
     Delegates to :func:`_bisect_lambda` with c_a² = 1.0 (Poisson arrivals).
 
@@ -501,7 +523,7 @@ def queue_mgc_lee_longton(
     Lee, A. M., Longton, P. A. (1959). Queueing processes associated
         with airline passenger check-in. Operational Research Quarterly,
         10, 56–71.
-    Pollaczek, F. (1930). Über eine Aufgabe der Wahrscheinlichkeitstheorie.
+    Pollaczek, F. (1930). Über eine Aufgabe der Wahrscheinlichkeitstheorie. I
         Mathematische Zeitschrift, 32, 64–100.
     Khinchin, A. Y. (1932). Mathematical theory of a stationary queue.
         Matematicheskii Sbornik, 39(4), 73–84.
@@ -568,8 +590,8 @@ def queue_gigc_allen_cunneen(
 
     References
     ----------
-    Allen, A. O. (1978). Probability, Statistics, and Queueing Theory.
-        Academic Press.
+    Allen, A. О. (1990), Probability, Statistics and Queueing Theory, with Computer Science Applications,
+        2nd ed., Academic Press, Boston.
     Cooper, R. B. (1990). Introduction to Queueing Theory (3rd ed.),
         p. 508, Formula 9.3.
     Lee, A. M., Longton, P. A. (1959). Queueing processes associated
