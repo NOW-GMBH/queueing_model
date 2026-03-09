@@ -3,8 +3,7 @@ from typing import Dict, Any
 import numpy as np
 import pytest
 from queuing_model.queuing_model import (
-    queue_mgc_coop,
-    queue_mgc_Adan_Resing_stable,
+    queue_mgc_lee_longton,
     _compute_wq_for_lambda,
     _erlang_c_prob_wait,
     # Wrappers
@@ -26,7 +25,7 @@ def standard_params() -> Dict[str, Any]:
         "charging_time_min": 45,
         "stdev_ct_min": 10,
         "waiting_times_min": [5, 10, 20, 60],
-        "method": "adan",
+        "method": "lee_longton",
         "beta": 1.0,
         "max_server": 20,
     }
@@ -37,18 +36,18 @@ class TestCoreFunctions:
 
     def test_compute_wq_for_lambda_stability(self):
         """Edge Cases: Instabilität, λ=0, c=1"""
-        mu, charging_time, vk = 2.0, 0.5, 0.5
+        mu, charging_time, vk, ca_2 = 2.0, 0.5, 0.5, 1
 
         # Instabil: ρ >= 1
-        roh, wq_mm, wq_mgc = _compute_wq_for_lambda(10, 4, mu, charging_time, vk)
+        roh, wq_mm, wq_mgc = _compute_wq_for_lambda(10, 4, mu, charging_time, vk, ca_2)
         assert not math.isfinite(wq_mgc)
 
         # λ = 0
-        roh, wq_mm, wq_mgc = _compute_wq_for_lambda(0, 4, mu, charging_time, vk)
+        roh, wq_mm, wq_mgc = _compute_wq_for_lambda(0, 4, mu, charging_time, vk, ca_2)
         assert wq_mgc == 0.0
 
         # c=1: Pollaczek-Khinchine
-        roh, wq_mm, wq_mgc = _compute_wq_for_lambda(1.5, 1, mu, charging_time, vk)
+        roh, wq_mm, wq_mgc = _compute_wq_for_lambda(1.5, 1, mu, charging_time, vk, ca_2)
         assert roh == pytest.approx(0.75, abs=1e-6)
 
     def test_erlang_c_prob_wait_correctness(self):
@@ -77,7 +76,7 @@ class TestCoreFunctions:
         charging_time_h = 45 / 60
         vk = 10 / 45
 
-        result = queue_mgc_Adan_Resing_stable(
+        result = queue_mgc_lee_longton(
             mean_waiting_time, servers, mu, charging_time_h, vk
         )
         lambda_max, rho, wq_mm, wq_mgc, wz_az = result
@@ -85,42 +84,6 @@ class TestCoreFunctions:
         assert lambda_max > 0
         assert rho < 1.0
         assert wq_mgc <= mean_waiting_time * 1.01  # 1% Toleranz
-
-    def test_queue_mgc_coop_basic_case(self):
-        mean_waiting_time = 5 / 60  # h
-        server = 4
-        mu = 2.0  # 1/h
-        charging_time = 0.5  # h
-        cv = 1.0
-        roh_0 = 0.99
-
-        lambda_0, roh, wq_mmc, wq_mgc, wz_az = queue_mgc_coop(
-            mean_waiting_time=mean_waiting_time,
-            server=server,
-            mu=mu,
-            charging_time=charging_time,
-            cv=cv,
-            roh_start=roh_0,
-        )
-
-        assert lambda_0 > 0.0
-        assert 0.0 < roh < 1.0
-        assert roh <= roh_0
-        assert mu == 1 / charging_time
-        assert wq_mgc <= mean_waiting_time
-        assert wz_az > 0.0
-
-        # Mit pytest.approx für Float-Toleranz
-        assert (wq_mmc) == pytest.approx(
-            (roh / (1 - roh)) * (charging_time / server), rel=1e-6
-        )
-
-    def test_queue_mgc_coop_fixed_no_unboundlocal(self):
-        """Testet coop ohne UnboundLocalError"""
-        # Extremfall: while überspringen
-        result = queue_mgc_coop(83, 5, 2.0, 0.5, 0.5)  # Wq-Ziel riesig
-        assert len(result) == 5
-        assert result[1] < 1.0  # rho < 1
 
 
 class TestWrapperFunctions:
@@ -196,7 +159,7 @@ class TestConfigValidation:
                 ç=45,
                 stdev_ct_min=10,
                 waiting_times_min=[5],
-                method="adan",
+                method="lee_longton",
                 beta=1.0,
                 search_radius=None,
                 max_server=100,
@@ -213,7 +176,7 @@ class TestEdgeCases:
             charging_time_min=45,
             stdev_ct_min=10,
             waiting_times_min=[0.0],
-            method="adan",
+            method="lee_longton",
         )
         assert result[1]["0.0"] is None or result[1]["0.0"] > 100
 
@@ -224,7 +187,7 @@ class TestEdgeCases:
             charging_time_min=45,
             stdev_ct_min=10,
             waiting_times_min=[5.0],
-            method="adan",
+            method="lee_longton",
             beta=2,
             max_server=1000,
         )
@@ -250,8 +213,7 @@ class TestPerformanceMetrics:
 @pytest.mark.parametrize(
     "method,expected_servers",
     [
-        ("coop", {"5.0": 11, "10.0": 10, "20.0": 9, "60.0": 8}),
-        ("adan", {"5.0": 10, "10.0": 9, "20.0": 9, "60.0": 8}),
+        ("lee_longton", {"5.0": 10, "10.0": 9, "20.0": 9, "60.0": 8}),
     ],
 )
 def test_que_mgc_server_wq_qed_consistency(standard_params, method, expected_servers):
@@ -278,8 +240,7 @@ def test_que_mgc_server_wq_qed_consistency(standard_params, method, expected_ser
 @pytest.mark.parametrize(
     "method,expected_servers",
     [
-        ("coop", {"5.0": 11, "10.0": 10, "20.0": 9, "60.0": 8}),
-        ("adan", {"5.0": 10, "10.0": 9, "20.0": 9, "60.0": 8}),
+        ("lee_longton", {"5.0": 10, "10.0": 9, "20.0": 9, "60.0": 8}),
     ],
 )
 def test_que_mgc_server_wq_consistency(standard_params, method, expected_servers):
