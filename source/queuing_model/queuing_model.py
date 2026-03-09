@@ -1,5 +1,6 @@
 import pandas as pd
 import math
+import warnings
 from typing import Tuple, List, Literal, Annotated
 from pydantic import Field, validate_call
 from functools import wraps
@@ -8,6 +9,12 @@ _FACTORS = {"hours_to_minutes": 60, "hours_to_seconds": 3600, "hours_to_days": 1
 _MINUTES_TO_HOURS = 1 / 60
 _PER_MINUTE_TO_HOURS = 60
 _DEFAULT_TIME_COLS = ["wq_mmc", "wq_mgc"]
+
+_WQ_COL = {
+    "lee_longton": "wq_mgc",
+    "lee_longton_old": "wq_mgc",
+    "allen_cunneen": "wq_gigc",
+}
 
 
 def convert_units(
@@ -142,78 +149,6 @@ def server_utilization(lambda_target: float, servers: int, mu: float) -> float:
     if servers * mu <= 0:
         raise ValueError("Invalid parameters")
     return lambda_target / (servers * mu)
-
-
-@validate_call
-def queue_mgc_coop(
-    mean_waiting_time: Annotated[float, Field(ge=0)],
-    server: Annotated[int, Field(gt=0)],
-    mu: Annotated[float, Field(gt=0)],
-    charging_time: Annotated[float, Field(ge=0)],
-    cv: Annotated[float, Field(ge=0)],
-    wq_mgc_init: Annotated[float, Field(gt=1)] = 50,
-    roh_start: Annotated[float, Field(gt=0, lt=1)] = 0.99,
-    max_iterations: Annotated[int, Field(gt=10, lt=1000000)] = 1000000,
-) -> List[float]:
-    """M/G/c waiting-time approximation using the Cooper (1990) M/M/1 extension.
-
-    Computes the maximum feasible arrival rate λ for a multi-server queue by
-    iteratively reducing λ until the mean waiting time no longer exceeds the
-    target.
-
-    The M/M/1 mean waiting time formula is extended to a multi-server setting
-    and corrected for service-time variability using the Pollaczek–Khinchine
-    (P–K) mean value formula (Pollaczek, 1930; Khinchin, 1932), yielding an
-    approximation of the M/G/c waiting time. The underlying approximation is
-    presented as a practical formula in Cooper (1990, p. 508, Eq. 9.3).
-
-    Parameters
-    ----------
-    mean_waiting_time : float
-        Target mean waiting time in hours.
-    server : int
-        Number of parallel servers (charging points).
-    mu : float
-        Mean service rate per server in 1/hours.
-    charging_time : float
-        Average service (charging) time per customer in hours.
-    cv : float
-        Coefficient of variation of service times (standard deviation / mean).
-    wq_mgc_init : float, optional
-        Initial waiting time guess in hours. Default is 50.
-    roh_start : float, optional
-        Initial utilization factor ρ₀. Default is 0.99.
-    max_iterations : int, optional
-        Maximum number of iterations before raising an error. Default is 1,000,000.
-
-    Returns
-    -------
-    list[float]
-        ``[λmax (1/h), ρ, Wq_MM_c (hours), Wq_MG_c (hours), Wq/ServiceTime ratio]``
-    """
-    lambda_max = roh_start * (server * mu)
-    roh = roh_start
-    wq_mmc = 0.0
-    wq_mgc = wq_mgc_init
-    wz_az = 0.0
-
-    iterations = 0
-    while wq_mgc > mean_waiting_time:
-
-        iterations += 1
-        if iterations >= max_iterations:
-            raise ValueError(f"Did not converge in {max_iterations} iterations")
-
-        lambda_max -= 0.0001
-        if lambda_max <= 0:
-            raise ValueError("Lambda became non-positive")
-
-        roh = lambda_max / (server * mu)
-        wq_mmc = (roh / (1 - roh)) * (charging_time / server)
-        wq_mgc = wq_mmc * ((1 + cv**2) / 2)
-        wz_az = wq_mgc / charging_time
-
-    return [lambda_max, roh, wq_mmc, wq_mgc, wz_az]
 
 
 @validate_call
@@ -368,9 +303,17 @@ def _erlang_c_prob_wait(c: int, rho: float) -> float:
 
 
 def _compute_wq_for_lambda(
-    lmbda: float, c: int, mu: float, charging_time: float, cv: float
+    lmbda: float,
+    c: int,
+    mu: float,
+    charging_time: float,
+    cv: float,
+    c_a2: float,
 ) -> Tuple[float, float, float]:
-    """Compute ρ, Wq_MM_c, and Wq_MG_c (all in hours) for a given arrival rate λ.
+    """Compute ρ, Wq_MM_c, and Wq_GI_G_c or Wq_MG_c (c_a² = 1.0) for a given arrival rate λ.
+
+    For c_a² > 1
+    For c_a² = 1.0 (Poisson arrivals) this function computes the waiting times in a M/G/c system.
 
     Parameters
     ----------
@@ -384,11 +327,14 @@ def _compute_wq_for_lambda(
         Mean service time in hours.
     cv : float
         Coefficient of variation of service times (standard deviation / mean).
+    c_a2 : float
+        Squared coefficient of variation of interarrival times.
+        Use 1.0 for Poisson arrivals (reduces to Lee-Longton).
 
     Returns
     -------
     tuple[float, float, float]
-        ``(ρ, Wq_MM_c [hours], Wq_MG_c [hours])``
+        ``(ρ, Wq_MM_c [hours], Wq_GI_G_c [hours])``
     """
     if lmbda <= 0:
         return 0.0, 0.0, 0.0
@@ -399,28 +345,112 @@ def _compute_wq_for_lambda(
         return roh, float("inf"), float("inf")
 
     # -----------------------------
-    # M/G/1 special case
+    # GI/G/1 | M/G/1 (c_a² = 1.0) special case
     # -----------------------------
     if c == 1:
         E_S = charging_time
         E_S2 = E_S * E_S * (1 + cv * cv)
-        wq = (lmbda * E_S2) / (2 * (1 - roh))
-        wq_mgc = wq
-        return roh, wq, wq_mgc
+        # Pollaczek-Khinchine base, scaled by (c_a2 + c_s2) / 2
+        # For c_a2=1.0 this reduces to the standard P-K formula
+        wq_mg1 = (lmbda * E_S2) / (2 * (1 - roh))
+        wq_gigc = wq_mg1 * ((c_a2 + cv * cv) / (1 + cv * cv))
+        return roh, wq_mg1, wq_gigc
 
     # -----------------------------
-    # M/M/c base
+    # M/M/c base (Erlang-C)
     # -----------------------------
     P_wait = _erlang_c_prob_wait(c, roh)
     denom = c * mu * (1 - roh)
     wq_mmc = P_wait / denom
 
     # -----------------------------
-    # M/G/c Lee-Longton approximation
+    # Allen-Cunneen GI/G/c approximation | M/G/c Lee-Longton approximation (c_a² = 1.0)
     # -----------------------------
-    wq_mgc = wq_mmc * ((1 + cv * cv) / 2.0)
+    wq_gigc = wq_mmc * ((c_a2 + cv * cv) / 2.0)
 
-    return roh, wq_mmc, wq_mgc
+    return roh, wq_mmc, wq_gigc
+
+
+def _bisect_lambda(
+    mean_waiting_time: float,
+    server: int,
+    mu: float,
+    charging_time: float,
+    cv: float,
+    c_a2: float,
+    roh_start: float,
+    tol_minutes: float,
+    max_iter: int,
+) -> List[float]:
+    """Bisection core shared by queue_mgc_lee_longton and queue_gigc_allen_cunneen.
+        Determines the maximum arrival rate λ for a target mean waiting time.
+
+    Parameters
+    ----------
+    mean_waiting_time : float
+        Target mean waiting time in hours.
+    server : int
+        Number of parallel servers c.
+    mu : float
+        Mean service rate per server in 1/hours.
+    charging_time : float
+        Mean service (charging) time per customer in hours.
+    cv : float
+        Coefficient of variation of service times.
+    c_a2 : float
+        Squared coefficient of variation of interarrival times.
+        Use 1.0 for Lee-Longton (Poisson arrivals).
+    roh_start : float
+        Initial upper utilization bound ρ₀ (< 1).
+    tol_minutes : float
+        Convergence tolerance on the waiting time.
+    max_iter : int
+        Maximum number of bisection iterations.
+
+    Returns
+    -------
+    list[float]
+        ``[λmax (1/h), ρ, Wq_MMc (hours), Wq_Model (hours), Wq/ServiceTime ratio]``
+    """
+    lambda_max = server * mu * roh_start
+    lambda_low = 0.0
+
+    best_lambda = 0.0
+    best_roh = 0.0
+    best_wq = 0.0
+    best_wq_out = 0.0
+
+    for _ in range(max_iter):
+        mid = 0.5 * (lambda_low + lambda_max)
+
+        roh, wq_mmc, wq_out = _compute_wq_for_lambda(
+            mid, server, mu, charging_time, cv, c_a2
+        )
+
+        if not math.isfinite(wq_out):
+            lambda_max = mid
+            continue
+
+        if wq_out <= mean_waiting_time:
+            best_lambda = mid
+            best_roh = roh
+            best_wq = wq_mmc
+            best_wq_out = wq_out
+            lambda_low = mid
+        else:
+            lambda_max = mid
+
+        if abs(wq_out - mean_waiting_time) < tol_minutes:
+            break
+        if lambda_max - lambda_low < 1e-12:
+            break
+
+    if best_lambda == 0.0 and mean_waiting_time > 0:
+        raise ValueError(
+            "No lambda found that meets the waiting-time target; try higher server count."
+        )
+
+    return [best_lambda, best_roh, best_wq, best_wq_out, best_wq_out / charging_time]
 
 
 @validate_call
@@ -437,14 +467,10 @@ def queue_mgc_lee_longton(
     """Numerically stable M/G/c approximation using the Lee–Longton (1959) scaling factor.
 
     Determines the maximum arrival rate λ for a target mean waiting time using
-    a bisection approach. Internally delegates waiting-time evaluation to
-    :func:`_compute_wq_for_lambda`, which applies the Erlang-C formula for the
-    M/M/c base and scales the result by the Lee–Longton factor (1 + cv²) / 2
-    to obtain the M/G/c waiting time.
+    a bisection approach. Scales the exact M/M/c (Erlang-C) waiting time by
+    the Lee–Longton factor (1 + cv²) / 2 to approximate the M/G/c waiting time.
 
-    Unlike :func:`queue_mgc_lee_longton_old`, this implementation uses a
-    numerically stable Erlang-C computation (log-space arithmetic) and
-    bisection instead of linear step-down iteration.
+    Delegates to :func:`_bisect_lambda` with c_a² = 1.0 (Poisson arrivals).
 
     Parameters
     ----------
@@ -468,49 +494,99 @@ def queue_mgc_lee_longton(
     Returns
     -------
     list[float]
-        ``[λmax (1/h), ρ, Wq_MM_c (hours), Wq_MG_c (hours), Wq/ServiceTime ratio]``
+        ``[λmax (1/h), ρ, Wq_MMc (hours), Wq_MGc (hours), Wq/ServiceTime ratio]``
+
+    References
+    ----------
+    Lee, A. M., Longton, P. A. (1959). Queueing processes associated
+        with airline passenger check-in. Operational Research Quarterly,
+        10, 56–71.
+    Pollaczek, F. (1930). Über eine Aufgabe der Wahrscheinlichkeitstheorie.
+        Mathematische Zeitschrift, 32, 64–100.
+    Khinchin, A. Y. (1932). Mathematical theory of a stationary queue.
+        Matematicheskii Sbornik, 39(4), 73–84.
     """
-    # Upper bound for λ: system stable just below c*mu
-    lambda_max = server * mu * roh_start
-    lambda_low = 0.0
+    return _bisect_lambda(
+        mean_waiting_time,
+        server,
+        mu,
+        charging_time,
+        cv,
+        c_a2=1.0,
+        roh_start=roh_start,
+        tol_minutes=tol_minutes,
+        max_iter=max_iter,
+    )
 
-    best_lambda = 0.0
-    best_roh = 0.0
-    best_wq = 0.0
-    best_wq_mgc = 0.0
 
-    for _ in range(max_iter):
-        mid = 0.5 * (lambda_low + lambda_max)
+@validate_call
+def queue_gigc_allen_cunneen(
+    mean_waiting_time: Annotated[float, Field(ge=0)],
+    server: Annotated[int, Field(gt=0)],
+    mu: Annotated[float, Field(gt=0)],
+    charging_time: Annotated[float, Field(ge=0)],
+    cv: Annotated[float, Field(ge=0)],
+    c_a2: Annotated[float, Field(ge=0)],
+    roh_start: Annotated[float, Field(gt=0, lt=1)] = 0.999999,
+    tol_minutes: Annotated[float, Field(gt=0)] = 1e-5,
+    max_iter: Annotated[int, Field(gt=10, lt=1000000)] = 80,
+) -> List[float]:
+    """GI/G/c waiting-time approximation using the Allen-Cunneen formula.
 
-        roh, wq_mmc, wq_mgc = _compute_wq_for_lambda(mid, server, mu, charging_time, cv)
+    Determines the maximum arrival rate λ for a target mean waiting time
+    using a bisection approach. Extends Lee-Longton to non-Poisson arrivals
+    by incorporating c_a² into the scaling factor (c_a² + cv²) / 2.
 
-        if not math.isfinite(wq_mgc):
-            lambda_max = mid
-            continue
+    For Poisson arrivals (c_a² = 1.0) equivalent to
+    :func:`queue_mgc_lee_longton`. Delegates to :func:`_bisect_lambda`.
 
-        if wq_mgc <= mean_waiting_time:
-            best_lambda = mid
-            best_roh = roh
-            best_wq = wq_mmc
-            best_wq_mgc = wq_mgc
-            lambda_low = mid
-        else:
-            lambda_max = mid
+    Parameters
+    ----------
+    mean_waiting_time : float
+        Target mean waiting time in hours.
+    server : int
+        Number of parallel servers c.
+    mu : float
+        Mean service rate per server in 1/hours.
+    charging_time : float
+        Mean service (charging) time per customer in hours.
+    cv : float
+        Coefficient of variation of service times (standard deviation / mean).
+    c_a2 : float
+        Squared coefficient of variation of interarrival times.
+    roh_start : float, optional
+        Initial upper utilization bound ρ₀ (< 1). Default is 0.999999.
+    tol_minutes : float, optional
+        Convergence tolerance on the waiting time. Default is 1e-5.
+    max_iter : int, optional
+        Maximum number of bisection iterations. Default is 80.
 
-        if abs(wq_mgc - mean_waiting_time) < tol_minutes:
-            break
-        if lambda_max - lambda_low < 1e-12:
-            break
+    Returns
+    -------
+    list[float]
+        ``[λmax (1/h), ρ, Wq_MMc (hours), Wq_GIGc (hours), Wq/ServiceTime ratio]``
 
-    # Ratio waiting time / service time
-    wz_az = best_wq_mgc / charging_time
-
-    if best_lambda == 0.0 and mean_waiting_time > 0:
-        raise ValueError(
-            "No lambda found that meets the waiting-time target; try higher server count."
-        )
-
-    return [best_lambda, best_roh, best_wq, best_wq_mgc, wz_az]
+    References
+    ----------
+    Allen, A. O. (1978). Probability, Statistics, and Queueing Theory.
+        Academic Press.
+    Cooper, R. B. (1990). Introduction to Queueing Theory (3rd ed.),
+        p. 508, Formula 9.3.
+    Lee, A. M., Longton, P. A. (1959). Queueing processes associated
+        with airline passenger check-in. Operational Research Quarterly,
+        10, 56–71.
+    """
+    return _bisect_lambda(
+        mean_waiting_time,
+        server,
+        mu,
+        charging_time,
+        cv,
+        c_a2=c_a2,
+        roh_start=roh_start,
+        tol_minutes=tol_minutes,
+        max_iter=max_iter,
+    )
 
 
 @convert_units(
@@ -526,7 +602,8 @@ def que_mgc(
     stdev_ct: Annotated[float, Field(ge=0)],
     mean_waiting_time: Annotated[float, Field(gt=0)],
     max_server: Annotated[int, Field(gt=0)],
-    method: Literal["coop", "lee_longton", "lee_longton_old"],
+    method: Literal["allen_culleen", "lee_longton", "lee_longton_old"],
+    c_a2: Annotated[float | None, Field(ge=0)] = None,
     output_unit: (
         Literal["hours_to_minutes", "hours_to_seconds", "hours_to_days"] | None
     ) = "hours_to_minutes",
@@ -550,7 +627,9 @@ def que_mgc(
         Target mean waiting time in hours.
     max_server : int
         Maximum number of servers to evaluate.
-    method : {'coop', 'lee_longton', 'lee_longton_old'}
+    c_a2 : float | None
+        Squared coefficient of variation of interarrival times. Only necessary for 'alleen-culleen'
+    method : {'allen_culleen', 'lee_longton', 'lee_longton_old'}
         Queueing approximation method to use.
     output_unit : {'hours_to_minutes', 'hours_to_seconds', 'hours_to_days'} or None, optional
         Time unit for output columns. ``None`` keeps hours. Default is
@@ -583,34 +662,47 @@ def que_mgc(
         ``['servers', 'lambda', 'roh', 'wq_mmc', 'wq_mgc', 'wz/az']``.
     """
     dict_method = {
-        "coop": queue_mgc_coop,
+        "allen_cunneen": queue_gigc_allen_cunneen,
         "lee_longton_old": queue_mgc_lee_longton_old,
         "lee_longton": queue_mgc_lee_longton,
     }
-    method = dict_method[method]
+
+    # Validation
+    if method == "allen_cunneen" and c_a2 is None:
+        raise ValueError("c_a2 is required for method='allen_cunneen'.")
+    if method != "allen_cunneen" and c_a2 is not None:
+        warnings.warn("c_a2 is ignored for method != 'allen_cunneen'.", UserWarning)
 
     mu = 1 / charging_time
     cv = stdev_ct / charging_time
 
+    wq_model_h = _WQ_COL[method]
+    cols = ["servers", "lambda", "roh", "wq_mmc", wq_model_h, "wz/az"]
+
     queue = pd.DataFrame(
         0.0,
         index=list(range(1, max_server + 1)),
-        columns=["servers", "lambda", "roh", "wq_mmc", "wq_mgc", "wz/az"],
+        columns=cols,
     )
 
     for server in range(1, max_server + 1):
-        queue.loc[server, ["servers", "lambda", "roh", "wq_mmc", "wq_mgc", "wz/az"]] = [
-            server
-        ] + method(mean_waiting_time, server, mu, charging_time, cv)
+        if method == "allen_cunneen":
+            result = queue_gigc_allen_cunneen(
+                mean_waiting_time, server, mu, charging_time, cv, c_a2
+            )
+        else:
+            result = dict_method[method](
+                mean_waiting_time, server, mu, charging_time, cv
+            )
+        queue.loc[server, cols] = [server] + result
+
+    if output_cols is None:
+        output_cols = ["wq_mmc", wq_model_h]
 
     if output_unit is not None:
         queue = _convert_units_dataframe(
             queue,
-            output=(
-                output_unit
-                if output_cols is None
-                else {col: output_unit for col in output_cols}
-            ),
+            output={col: output_unit for col in output_cols},
         )
 
     return queue
@@ -630,7 +722,8 @@ def que_mgc_server_wq(
     charging_time: Annotated[float, Field(ge=0)],
     stdev_ct: Annotated[float, Field(ge=0)],
     waiting_times: list[Annotated[float, Field(gt=0)]],
-    method: Literal["coop", "lee_longton", "lee_longton_old"],
+    method: Literal["allen_culleen", "lee_longton", "lee_longton_old"],
+    c_a2: Annotated[float | None, Field(ge=0)] = None,
     max_server: Annotated[int, Field(gt=0)] = 1000,
     output_unit: (
         Literal["hours_to_minutes", "hours_to_seconds", "hours_to_days"] | None
@@ -655,6 +748,8 @@ def que_mgc_server_wq(
         Standard deviation of the service time in hours.
     waiting_times : list[float]
         Target mean waiting times in hours to evaluate.
+    c_a2 : float | None
+        Squared coefficient of variation of interarrival times. Only necessary for 'alleen-culleen'
     method : {'coop', 'lee_longton', 'lee_longton_old'}
         Queueing approximation method to use.
     max_server : int, optional
@@ -689,11 +784,16 @@ def que_mgc_server_wq(
         number of servers.
     """
     dict_method = {
-        "coop": queue_mgc_coop,
+        "allen_cunneen": queue_gigc_allen_cunneen,
         "lee_longton_old": queue_mgc_lee_longton_old,
         "lee_longton": queue_mgc_lee_longton,
     }
-    method = dict_method[method]
+
+    # Validation
+    if method == "allen_cunneen" and c_a2 is None:
+        raise ValueError("c_a2 is required for method='allen_cunneen'.")
+    if method != "allen_cunneen" and c_a2 is not None:
+        warnings.warn("c_a2 is ignored for method != 'allen_cunneen'.", UserWarning)
 
     dict_server_wq = {}
 
@@ -704,10 +804,15 @@ def que_mgc_server_wq(
         chosen_server = None
 
         for server in range(1, max_server + 1):
+            if method == "allen_cunneen":
+                lambda_max, roh, wq_mmc_h, wq_model_h, wz_az = queue_gigc_allen_cunneen(
+                    mean_waiting_time, server, mu, charging_time, cv, c_a2
+                )
+            else:
+                lambda_max, roh, wq_mmc_h, wq_model_h, wz_az = dict_method[method](
+                    mean_waiting_time, server, mu, charging_time, cv
+                )
 
-            lambda_max, roh, wq_mmc_h, wq_mgc_h, wz_az = method(
-                mean_waiting_time, server, mu, charging_time, cv
-            )
             if mean_waiting_time > 0 and lambda_max <= 0:
                 continue
 
@@ -731,106 +836,6 @@ def que_mgc_server_wq(
         "stdev_ct_min": ("stdev_ct_hours", "stdev_ct"),
     }
 )
-@validate_call
-def queue_wq_roh_coop(
-    roh_range: Annotated[list[float], Field(ge=0)],
-    server: Annotated[int, Field(gt=0)],
-    charging_time: Annotated[float, Field(ge=0)],
-    stdev_ct: Annotated[float, Field(ge=0)],
-    output_unit: (
-        Literal["hours_to_minutes", "hours_to_seconds", "hours_to_days"] | None
-    ) = "hours_to_minutes",
-    output_cols: list[str] | None = Field(
-        default_factory=lambda: list(_DEFAULT_TIME_COLS)
-    ),  # noqa
-) -> pd.DataFrame:
-    """Compute M/G/c waiting times over a range of utilization values (Cooper).
-
-    For each utilization value ρ in ``roh_range``, calculates λ, Wq_MM_c,
-    Wq_MG_c, and the Wq/service-time ratio using the Cooper approximation.
-    Iteration stops early once ρ ≥ 1.
-
-    Parameters
-    ----------
-    roh_range : list[float]
-        Sequence of utilization values ρ to evaluate. Must be ≥ 0.
-    server : int
-        Number of parallel servers c.
-    charging_time : float
-        Mean service (charging) time in hours.
-    stdev_ct : float
-        Standard deviation of the service time in hours.
-    output_unit : {'hours_to_minutes', 'hours_to_seconds', 'hours_to_days'} or None, optional
-        Time unit for output columns. ``None`` keeps hours. Default is
-        ``'hours_to_minutes'``.
-    output_cols : list[str] or None, optional
-        Columns to apply the unit conversion to. Default is
-        ``['wq_mmc', 'wq_mgc']``.
-
-    Unit Handling
-    -------------
-    Each time parameter can be provided in either minutes or hours:
-
-    +----------------------+---------------------+
-    | Minutes              | Hours               |
-    +======================+=====================+
-    | charging_time_min    | charging_time_hours |
-    +----------------------+---------------------+
-    | stdev_ct_min         | stdev_ct_hours      |
-    +----------------------+---------------------+
-
-    If the parameter is not specified the default of the function is used.
-
-    Returns
-    -------
-    pd.DataFrame
-        One row per ρ value with columns
-        ``['lambda', 'server', 'roh', 'wq_mmc', 'wq_mgc', 'wz/az', 'krit_wert']``,
-        cast to ``float``.
-    """
-    queue = pd.DataFrame(
-        columns=["lambda", "server", "roh", "wq_mmc", "wq_mgc", "wz/az", "krit_wert"]
-    )
-
-    mu = 1 / charging_time
-    cv = stdev_ct / charging_time
-
-    for roh in roh_range:
-        lambda_value = roh * (server * mu)
-
-        if roh < 1:
-            wq_mmc = (roh / (1 - roh)) * (charging_time / server)
-            wq_mgc = wq_mmc * ((1 + cv**2) / 2)
-            wz_az = wq_mgc / charging_time
-        else:
-            break
-
-        queue.loc[
-            lambda_value,
-            ["lambda", "server", "roh", "wq_mmc", "wq_mgc", "wz/az", "krit_wert"],
-        ] = (
-            lambda_value,
-            server,
-            roh,
-            wq_mmc,
-            wq_mgc,
-            wz_az,
-            lambda_value / server,
-        )
-
-    if output_unit is not None:
-        queue = _convert_units_dataframe(
-            queue,
-            output=(
-                output_unit
-                if output_cols is None
-                else {col: output_unit for col in output_cols}
-            ),
-        )
-
-    return queue.astype("float")
-
-
 def _qed_servers(lambda_rate, mu, beta=1.0):
     """Compute the initial server count using the QED (Halfin–Whitt) staffing rule.
 
@@ -893,7 +898,8 @@ def que_mgc_server_wq_qed(
     charging_time: Annotated[float, Field(gt=0)],
     stdev_ct: Annotated[float, Field(ge=0)],
     waiting_times: list[Annotated[float, Field(ge=0)]],
-    method: Literal["coop", "lee_longton", "lee_longton_old"],
+    method: Literal["allen_culleen", "lee_longton", "lee_longton_old"],
+    c_a2: Annotated[float | None, Field(ge=0)] = None,
     beta: Annotated[float, Field(ge=0)] = 1.0,
     search_radius: Annotated[(int | None), Field(gt=1)] = None,
     max_server: Annotated[int, Field(gt=0)] = 1000,
@@ -919,6 +925,8 @@ def que_mgc_server_wq_qed(
     waiting_times : list[float]
         Target mean waiting times in hours for which the required server count
         is to be determined.
+    c_a2 : float | None
+        Squared coefficient of variation of interarrival times. Only necessary for 'alleen-culleen'
     method : {'coop', 'lee_longton', 'lee_longton_old'}
         Queueing approximation used to evaluate mean waiting times.
         ``'lee_longton_old'`` retains a known summation bug for comparability.
@@ -962,11 +970,16 @@ def que_mgc_server_wq_qed(
         range.
     """
     dict_method = {
-        "coop": queue_mgc_coop,
+        "allen_cunneen": queue_gigc_allen_cunneen,
         "lee_longton_old": queue_mgc_lee_longton_old,
         "lee_longton": queue_mgc_lee_longton,
     }
-    method = dict_method[method]
+
+    # Validation
+    if method == "allen_cunneen" and c_a2 is None:
+        raise ValueError("c_a2 is required for method='allen_cunneen'.")
+    if method != "allen_cunneen" and c_a2 is not None:
+        warnings.warn("c_a2 is ignored for method != 'allen_cunneen'.", UserWarning)
 
     dict_server_wq = {}
 
@@ -994,9 +1007,14 @@ def que_mgc_server_wq_qed(
 
         for server in range(search_start, search_end + 1):
 
-            lambda_max, roh_max, wq_mm_c, wq_mg_c, wz_az = method(
-                mean_waiting_time, server, mu, charging_time, cv
-            )
+            if method == "allen_cunneen":
+                lambda_max, roh, wq_mmc_h, wq_model_h, wz_az = queue_gigc_allen_cunneen(
+                    mean_waiting_time, server, mu, charging_time, cv, c_a2
+                )
+            else:
+                lambda_max, roh, wq_mmc_h, wq_model_h, wz_az = dict_method[method](
+                    mean_waiting_time, server, mu, charging_time, cv
+                )
 
             # Server is feasible if it can serve lambda_target and meets waiting time
             if lambda_max >= lambda_target:
