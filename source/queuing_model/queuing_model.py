@@ -8,7 +8,6 @@ from functools import wraps
 _FACTORS = {"hours_to_minutes": 60, "hours_to_seconds": 3600, "hours_to_days": 1 / 24}
 _MINUTES_TO_HOURS = 1 / 60
 _PER_MINUTE_TO_HOURS = 60
-_DEFAULT_TIME_COLS = ["wq_mmc", "wq_mgc"]
 
 _WQ_COL = {
     "lee_longton": "wq_mgc",
@@ -317,7 +316,7 @@ def _compute_wq_for_lambda(
     cv: float,
     c_a2: float,
 ) -> Tuple[float, float, float]:
-    """Compute ρ, Wq_MM_c, and Wq_GI_G_c or Wq_MG_c (c_a² = 1.0) for a given arrival rate λ.
+    """Compute ρ, Wq_MM_c, and Wq_GI_G_c (or Wq_MG_c for c_a² = 1.0) for a given arrival rate λ.
 
     Evaluates the waiting time for a given λ using either the exact M/G/1
     Pollaczek–Khinchine formula (c=1) or the Erlang-C based multi-server
@@ -629,9 +628,7 @@ def queue_max_lambda(
     output_unit: (
         Literal["hours_to_minutes", "hours_to_seconds", "hours_to_days"] | None
     ) = "hours_to_minutes",
-    output_cols: list[str] | None = Field(
-        default_factory=lambda: list(_DEFAULT_TIME_COLS)
-    ),  # noqa
+    output_cols: list[str] | None = None,
 ) -> pd.DataFrame:
     """Compute the maximum arrival rate across server counts for an M/G/c | GI/G/c queue.
 
@@ -690,7 +687,7 @@ def queue_max_lambda(
     -------
     pd.DataFrame
         One row per server count with columns
-        ``['servers', 'lambda', 'roh', 'wq_mmc', 'wq_mgc', 'wz/az']``.
+        ``['servers', 'lambda', 'roh', 'wq_mmc', 'wq_mgc' | 'wq_gigc', 'wz/az']``.
     """
     dict_method = {
         "allen_cunneen": queue_gigc_allen_cunneen,
@@ -869,12 +866,6 @@ def queue_min_servers(
     return lambda_target, dict_server_wq
 
 
-@convert_units(
-    time_map={
-        "charging_time_min": ("charging_time_hours", "charging_time"),
-        "stdev_ct_min": ("stdev_ct_hours", "stdev_ct"),
-    }
-)
 def _qed_servers(lambda_rate, mu, beta=1.0):
     """Compute the initial server count using the QED (Halfin–Whitt) staffing rule.
 
