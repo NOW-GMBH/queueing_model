@@ -7,8 +7,8 @@ from queuing_model.queuing_model import (
     _compute_wq_for_lambda,
     _erlang_c_prob_wait,
     # Wrappers
-    que_mgc,
-    que_mgc_server_wq_qed,
+    queue_max_lambda,
+    queue_min_servers_qed,
     server_utilization,
     # Helpers
     _qed_servers,
@@ -103,13 +103,13 @@ class TestWrapperFunctions:
         """Korrekte minimale Serverzahlen"""
         standard_params = standard_params.copy()
         standard_params["waiting_times_min"] = [wq_target]
-        result = que_mgc_server_wq_qed(**standard_params)
+        result = queue_min_servers_qed(**standard_params)
         found_servers = result[1][str(wq_target)]
         assert found_servers == expected_min_servers
 
     def test_que_mgc_monotonic_increasing_lambda(self, standard_params):
         """que_mgc: λ_max(c) wächst monoton"""
-        df = que_mgc(
+        df = queue_max_lambda(
             standard_params["charging_time_min"],
             standard_params["stdev_ct_min"],
             5.0,
@@ -141,7 +141,7 @@ class TestConfigValidation:
 
     def test_invalid_method_raises(self):
         with pytest.raises(ValidationError, match="literal_error"):
-            que_mgc_server_wq_qed(
+            queue_min_servers_qed(
                 lambda_target_hours=10,
                 charging_time_min=45,
                 stdev_ct_min=10,
@@ -154,7 +154,7 @@ class TestConfigValidation:
 
     def test_negative_lambda_error(self):
         with pytest.raises(ValidationError):
-            que_mgc_server_wq_qed(
+            queue_min_servers_qed(
                 lambda_target_hours=-1,
                 ç=45,
                 stdev_ct_min=10,
@@ -171,7 +171,7 @@ class TestEdgeCases:
 
     def test_zero_waiting_time(self):
         """Wq=0 → unendlich viele Server oder None"""
-        result = que_mgc_server_wq_qed(
+        result = queue_min_servers_qed(
             lambda_target_hours=10,
             charging_time_min=45,
             stdev_ct_min=10,
@@ -182,7 +182,7 @@ class TestEdgeCases:
 
     def test_large_system_scaling(self):
         """Großes System testet Skalierung"""
-        result = que_mgc_server_wq_qed(
+        result = queue_min_servers_qed(
             lambda_target_hours=1000,
             charging_time_min=45,
             stdev_ct_min=10,
@@ -221,7 +221,7 @@ def test_que_mgc_server_wq_qed_consistency(standard_params, method, expected_ser
     params = standard_params.copy()
     params["method"] = method
 
-    lambda_value, server_dict = que_mgc_server_wq_qed(**params)
+    lambda_value, server_dict = queue_min_servers_qed(**params)
 
     assert lambda_value > 0, f"{method}: Lambda sollte positiv sein"
     assert len(server_dict) == len(
@@ -249,7 +249,7 @@ def test_que_mgc_server_wq_consistency(standard_params, method, expected_servers
     params = {k: v for k, v in params.items() if k != "beta"}
     params["method"] = method
 
-    lambda_value, server_dict = que_mgc_server_wq_qed(**params)
+    lambda_value, server_dict = queue_min_servers_qed(**params)
 
     assert lambda_value > 0, f"{method}: Lambda sollte positiv sein"
     assert len(server_dict) == len(

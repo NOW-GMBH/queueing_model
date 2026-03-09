@@ -619,12 +619,12 @@ def queue_gigc_allen_cunneen(
     }
 )
 @validate_call
-def que_mgc(
+def queue_max_lambda(
     charging_time: Annotated[float, Field(ge=0)],
     stdev_ct: Annotated[float, Field(ge=0)],
     mean_waiting_time: Annotated[float, Field(gt=0)],
     max_server: Annotated[int, Field(gt=0)],
-    method: Literal["allen_culleen", "lee_longton", "lee_longton_old"],
+    method: Literal["allen_cunneen", "lee_longton", "lee_longton_old"],
     c_a2: Annotated[float | None, Field(ge=0)] = None,
     output_unit: (
         Literal["hours_to_minutes", "hours_to_seconds", "hours_to_days"] | None
@@ -633,7 +633,7 @@ def que_mgc(
         default_factory=lambda: list(_DEFAULT_TIME_COLS)
     ),  # noqa
 ) -> pd.DataFrame:
-    """Compute the maximum arrival rate across server counts for an M/G/c queue.
+    """Compute the maximum arrival rate across server counts for an M/G/c | GI/G/c queue.
 
     Iterates over server counts from 1 to ``max_server`` and computes the
     maximum feasible arrival rate λ, traffic intensity ρ, mean waiting times,
@@ -649,10 +649,19 @@ def que_mgc(
         Target mean waiting time in hours.
     max_server : int
         Maximum number of servers to evaluate.
-    c_a2 : float | None
-        Squared coefficient of variation of interarrival times. Only necessary for 'alleen-culleen'
-    method : {'allen_culleen', 'lee_longton', 'lee_longton_old'}
-        Queueing approximation method to use.
+    method : {'allen_cunneen', 'lee_longton', 'lee_longton_old'}
+        Queueing approximation method to use:
+        - ``'lee_longton'``: M/G/c approximation (Poisson arrivals).
+          Scales the Erlang-C waiting time by (1 + cv²) / 2.
+        - ``'allen_cunneen'``: GI/G/c approximation (general arrivals).
+          Scales the Erlang-C waiting time by (c_a² + cv²) / 2.
+          Requires ``c_a2``.
+        - ``'lee_longton_old'``: Legacy implementation, retained for
+          comparability only
+    c_a2 : float or None, optional
+        Squared coefficient of variation of interarrival times.
+        Required for ``method='allen_cunneen'``, ignored otherwise.
+        Default is ``None``.
     output_unit : {'hours_to_minutes', 'hours_to_seconds', 'hours_to_days'} or None, optional
         Time unit for output columns. ``None`` keeps hours. Default is
         ``'hours_to_minutes'``.
@@ -739,12 +748,12 @@ def que_mgc(
     rate_map={"lambda_target_min": ("lambda_target_hours", "lambda_target")},
 )
 @validate_call
-def que_mgc_server_wq(
+def queue_min_servers(
     lambda_target: Annotated[float, Field(gt=0)],
     charging_time: Annotated[float, Field(ge=0)],
     stdev_ct: Annotated[float, Field(ge=0)],
     waiting_times: list[Annotated[float, Field(gt=0)]],
-    method: Literal["allen_culleen", "lee_longton", "lee_longton_old"],
+    method: Literal["allen_cunneen", "lee_longton", "lee_longton_old"],
     c_a2: Annotated[float | None, Field(ge=0)] = None,
     max_server: Annotated[int, Field(gt=0)] = 1000,
     output_unit: (
@@ -770,10 +779,18 @@ def que_mgc_server_wq(
         Standard deviation of the service time in hours.
     waiting_times : list[float]
         Target mean waiting times in hours to evaluate.
-    c_a2 : float | None
-        Squared coefficient of variation of interarrival times. Only necessary for 'alleen-culleen'
-    method : {'coop', 'lee_longton', 'lee_longton_old'}
-        Queueing approximation method to use.
+    method : {'allen_cunneen', 'lee_longton', 'lee_longton_old'}
+        Queueing approximation method to use:
+        - ``'lee_longton'``: M/G/c approximation (Poisson arrivals).
+        - ``'allen_cunneen'``: GI/G/c approximation (general arrivals).
+          Requires ``c_a2``.
+        - ``'lee_longton_old'``: Legacy implementation, retained for
+          comparability only.
+
+    c_a2 : float or None, optional
+        Squared coefficient of variation of interarrival times.
+        Required for ``method='allen_cunneen'``, ignored otherwise.
+        Default is ``None``.
     max_server : int, optional
         Maximum number of servers to consider. Default is 1000.
     output_unit : {'hours_to_minutes', 'hours_to_seconds', 'hours_to_days'} or None, optional
@@ -877,6 +894,13 @@ def _qed_servers(lambda_rate, mu, beta=1.0):
     -------
     int
         Ceiling of the staffing estimate.
+
+    References
+    ----------
+    Borst, S., Mandelbaum, A., Reiman, M. (2004). Dimensioning large
+    call centers. Operations Research, 52(1), 17–34.
+    Halfin, S., Whitt, W. (1981). Heavy-traffic limits for queues with many
+        exponential servers. Operations Research, 29(3), 567–588.
     """
     R = lambda_rate / mu
     return math.ceil(R + beta * math.sqrt(R))
@@ -915,12 +939,12 @@ def _auto_search_radius(lambda_target, mu):
     rate_map={"lambda_target_min": ("lambda_target_hours", "lambda_target")},
 )
 @validate_call
-def que_mgc_server_wq_qed(
+def queue_min_servers_qed(
     lambda_target: Annotated[float, Field(gt=0)],
     charging_time: Annotated[float, Field(gt=0)],
     stdev_ct: Annotated[float, Field(ge=0)],
     waiting_times: list[Annotated[float, Field(ge=0)]],
-    method: Literal["allen_culleen", "lee_longton", "lee_longton_old"],
+    method: Literal["allen_cunneen", "lee_longton", "lee_longton_old"],
     c_a2: Annotated[float | None, Field(ge=0)] = None,
     beta: Annotated[float, Field(ge=0)] = 1.0,
     search_radius: Annotated[(int | None), Field(gt=1)] = None,
@@ -929,12 +953,16 @@ def que_mgc_server_wq_qed(
         Literal["hours_to_minutes", "hours_to_seconds", "hours_to_days"] | None
     ) = "hours_to_minutes",
 ) -> tuple:
-    """Determine required server counts via QED-guided search for an M/G/c queue.
+    """Determine required server counts via QED-guided search for an M/G/c or GI/G/c queue.
 
     For each target mean waiting time, finds the smallest number of servers that
     can stably serve ``lambda_target`` and satisfies the waiting-time constraint.
     The search is initialized using the QED (Halfin–Whitt) square-root staffing
     rule c ≈ R + β·√R, with R = λ / μ.
+
+    Prefer this function over :func:`queue_min_servers` for large systems
+    (high λ / μ), where a full linear search from c = 1 is computationally
+    expensive.
 
     Parameters
     ----------
@@ -947,11 +975,18 @@ def que_mgc_server_wq_qed(
     waiting_times : list[float]
         Target mean waiting times in hours for which the required server count
         is to be determined.
-    c_a2 : float | None
-        Squared coefficient of variation of interarrival times. Only necessary for 'alleen-culleen'
-    method : {'coop', 'lee_longton', 'lee_longton_old'}
-        Queueing approximation used to evaluate mean waiting times.
-        ``'lee_longton_old'`` retains a known summation bug for comparability.
+    method : {'allen_cunneen', 'lee_longton', 'lee_longton_old'}
+        Queueing approximation method to use:
+
+        - ``'lee_longton'``: M/G/c approximation (Poisson arrivals).
+        - ``'allen_cunneen'``: GI/G/c approximation (general arrivals).
+          Requires ``c_a2``.
+        - ``'lee_longton_old'``: Legacy implementation, retained for
+          comparability only.
+    c_a2 : float or None, optional
+        Squared coefficient of variation of interarrival times.
+        Required for ``method='allen_cunneen'``, ignored otherwise.
+        Default is ``None``.
     beta : float, optional
         QED quality parameter. ``beta = 0`` corresponds to efficiency-driven
         staffing; higher values add safety capacity. Default is 1.0.
@@ -990,6 +1025,13 @@ def que_mgc_server_wq_qed(
         target mean waiting time (in ``output_unit``) to the minimum feasible
         server count, or ``None`` if no solution was found within the search
         range.
+
+    References
+    ----------
+    Borst, S., Mandelbaum, A., Reiman, M. (2004). Dimensioning large
+    call centers. Operations Research, 52(1), 17–34.
+    Halfin, S., Whitt, W. (1981). Heavy-traffic limits for queues with many
+        exponential servers. Operations Research, 29(3), 567–588.
     """
     dict_method = {
         "allen_cunneen": queue_gigc_allen_cunneen,
@@ -1005,9 +1047,8 @@ def que_mgc_server_wq_qed(
 
     dict_server_wq = {}
 
-    stdev_ct_h = stdev_ct / 60
     mu = 1 / charging_time
-    cv = stdev_ct_h / charging_time
+    cv = stdev_ct / charging_time
 
     # Minimum server count for stability
     min_stable_servers = math.ceil(lambda_target / mu)
