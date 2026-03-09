@@ -1046,7 +1046,6 @@ def queue_min_servers_qed(
 
     if search_radius is None:
         search_radius = _auto_search_radius(lambda_target, mu)
-        print(f"Auto search_radius = {search_radius:.1f}")
 
     for mean_waiting_time in waiting_times:
 
