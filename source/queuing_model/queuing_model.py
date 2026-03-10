@@ -354,8 +354,8 @@ def _compute_wq_for_lambda(
         (Erlang-C base, c>1.)
     Lee, A. M., & Longton, P. A. (1959). Queueing Processes Associated with Airline Passenger Check-in.
         Journal of the Operational Research Society, 10(1), 56–71. (Scaling factor for c_a²=1.0.)
-    Allen, A. О. (1990), Probability, Statistics and Queueing Theory, with Computer Science Applications,
-        2nd ed., Academic Press, Boston. (Scaling factor for c_a²≠1.0.)
+    Whitt, W. (1983). The Queueing Network Analyzer.
+        Bell System Technical Journal, 62(9), 2779–2815.
     """
     if lmbda <= 0:
         return 0.0, 0.0, 0.0
@@ -519,13 +519,14 @@ def queue_mgc_lee_longton(
 
     References
     ----------
+    Khinchin, A. Y. (1932). Mathematical theory of a stationary queue.
+        Matematicheskii Sbornik, 39(4), 73–84.
     Lee, A. M., Longton, P. A. (1959). Queueing processes associated
         with airline passenger check-in. Operational Research Quarterly,
         10, 56–71.
     Pollaczek, F. (1930). Über eine Aufgabe der Wahrscheinlichkeitstheorie. I
         Mathematische Zeitschrift, 32, 64–100.
-    Khinchin, A. Y. (1932). Mathematical theory of a stationary queue.
-        Matematicheskii Sbornik, 39(4), 73–84.
+
     """
     return _bisect_lambda(
         mean_waiting_time,
@@ -591,11 +592,12 @@ def queue_gigc_allen_cunneen(
     ----------
     Allen, A. О. (1990), Probability, Statistics and Queueing Theory, with Computer Science Applications,
         2nd ed., Academic Press, Boston.
-    Cooper, R. B. (1990). Introduction to Queueing Theory (3rd ed.),
-        p. 508, Formula 9.3.
-    Lee, A. M., Longton, P. A. (1959). Queueing processes associated
-        with airline passenger check-in. Operational Research Quarterly,
-        10, 56–71.
+    Kingman, J. F. C. (1962). On queues in heavy traffic.
+        Journal of the Royal Statistical Society B, 24(2), 383–392.
+        (Original single-server GI/G/1 scaling factor.)
+    Whitt, W. (1983). The Queueing Network Analyzer.
+        Bell System Technical Journal, 62(9), 2779–2815.
+        (GI/G/c approximation: scaling M/M/c by (c_a² + c_s²) / 2.)
     """
     return _bisect_lambda(
         mean_waiting_time,
