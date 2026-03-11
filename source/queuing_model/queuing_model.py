@@ -1091,3 +1091,228 @@ def queue_min_servers_qed(
         dict_server_wq[str(mean_waiting_time)] = best_c
 
     return lambda_target, dict_server_wq
+
+
+@convert_units(
+    time_map={
+        "charging_time_min": ("charging_time_hours", "charging_time"),
+        "stdev_ct_min": ("stdev_ct_hours", "stdev_ct"),
+    }
+)
+@validate_call
+def queue_sweep_rho(
+    rho_range: list[Annotated[float, Field(gt=0, lt=1)]],
+    servers: Annotated[int, Field(gt=0)],
+    charging_time: Annotated[float, Field(gt=0)],
+    stdev_ct: Annotated[float, Field(ge=0)],
+    method: Literal["allen_cunneen", "lee_longton", "lee_longton_old"],
+    c_a2: Annotated[float | None, Field(ge=0)] = None,
+    output_unit: (
+        Literal["hours_to_minutes", "hours_to_seconds", "hours_to_days"] | None
+    ) = "hours_to_minutes",
+) -> pd.DataFrame:
+    """Compute waiting times over a range of traffic intensities ρ for a fixed server count.
+
+    Iterates over the given utilization values and computes for each ρ the
+    corresponding arrival rate λ = ρ · c · μ, the exact M/M/c waiting time
+    (Erlang-C), and the approximated M/G/c or GI/G/c waiting time.
+
+    Parameters
+    ----------
+    rho_range : list[float]
+        Traffic intensities ρ ∈ (0, 1) to evaluate.
+    servers : int
+        Number of parallel servers c.
+    charging_time : float
+        Mean service (charging) time in hours.
+    stdev_ct : float
+        Standard deviation of the service time in hours.
+    method : {'allen_cunneen', 'lee_longton', 'lee_longton_old'}
+        Queueing approximation method to use:
+
+        - ``'lee_longton'``: M/G/c approximation (Poisson arrivals).
+          Scales the Erlang-C waiting time by (1 + cv²) / 2.
+        - ``'allen_cunneen'``: GI/G/c approximation (general arrivals).
+          Scales the Erlang-C waiting time by (c_a² + cv²) / 2.
+          Requires ``c_a2``.
+        - ``'lee_longton_old'``: Legacy implementation, retained for
+          comparability only.
+
+    c_a2 : float or None, optional
+        Squared coefficient of variation of interarrival times.
+        Required for ``method='allen_cunneen'``, ignored otherwise.
+        Default is ``None``.
+    output_unit : {'hours_to_minutes', 'hours_to_seconds', 'hours_to_days'} or None, optional
+        Time unit for waiting-time output columns. ``None`` keeps hours.
+        Default is ``'hours_to_minutes'``.
+
+    Unit Handling
+    -------------
+    Each time parameter can be provided in either minutes or hours:
+
+    +---------------------+--------------------+
+    | Minutes             | Hours              |
+    +=====================+====================+
+    | charging_time_min   | charging_time_hours|
+    +---------------------+--------------------+
+    | stdev_ct_min        | stdev_ct_hours     |
+    +---------------------+--------------------+
+
+    Returns
+    -------
+    pd.DataFrame
+        One row per ρ value with columns
+        ``['rho', 'lambda', 'servers', 'wq_mmc', 'wq_mgc' | 'wq_gigc', 'wz/az']``.
+    """
+    # Validation
+    if method == "allen_cunneen" and c_a2 is None:
+        raise ValueError("c_a2 is required for method='allen_cunneen'.")
+    if method != "allen_cunneen" and c_a2 is not None:
+        warnings.warn("c_a2 is ignored for method != 'allen_cunneen'.", UserWarning)
+
+    mu = 1 / charging_time
+    cv = stdev_ct / charging_time
+    c_a2_val = c_a2 if method == "allen_cunneen" else 1.0
+
+    wq_col = _WQ_COL[method]
+    cols = ["rho", "lambda", "servers", "wq_mmc", wq_col, "wz/az"]
+
+    records = []
+    for rho in rho_range:
+        lmbda = rho * servers * mu
+        rho_out, wq_mmc, wq_model = _compute_wq_for_lambda(
+            lmbda, servers, mu, charging_time, cv, c_a2_val
+        )
+        records.append(
+            [rho_out, lmbda, servers, wq_mmc, wq_model, wq_model / charging_time]
+        )
+
+    result = pd.DataFrame(records, columns=cols)
+
+    if output_unit is not None:
+        result = _convert_units_dataframe(
+            result,
+            output={col: output_unit for col in ["wq_mmc", wq_col]},
+        )
+
+    return result
+
+
+@convert_units(
+    time_map={
+        "charging_time_min": ("charging_time_hours", "charging_time"),
+        "stdev_ct_min": ("stdev_ct_hours", "stdev_ct"),
+    },
+    rate_map={"lambda_target_min": ("lambda_target_hours", "lambda_target")},
+)
+@validate_call
+def queue_sweep_beta(
+    beta_range: list[Annotated[float, Field(ge=0)]],
+    lambda_target: Annotated[float, Field(gt=0)],
+    charging_time: Annotated[float, Field(gt=0)],
+    stdev_ct: Annotated[float, Field(ge=0)],
+    method: Literal["allen_cunneen", "lee_longton", "lee_longton_old"],
+    c_a2: Annotated[float | None, Field(ge=0)] = None,
+    output_unit: (
+        Literal["hours_to_minutes", "hours_to_seconds", "hours_to_days"] | None
+    ) = "hours_to_minutes",
+) -> pd.DataFrame:
+    """Evaluate the effect of QED safety staffing parameter β on server count,
+    utilization ρ, and mean waiting time for a fixed target arrival rate λ.
+
+    For each β in ``beta_range``, derives the QED server count
+    c = ⌈R + β·√R⌉ with R = λ / μ, then computes the resulting traffic
+    intensity ρ = λ / (c·μ) and the approximated mean waiting time Wq.
+
+    This function is intended for sensitivity analysis: it shows how
+    increasing β trades server utilization for shorter waiting times.
+
+    Parameters
+    ----------
+    beta_range : list[float]
+        QED quality parameters β ≥ 0 to evaluate. β = 0 corresponds to
+        efficiency-driven staffing (ρ → 1); higher values add safety capacity.
+    lambda_target : float
+        Target arrival rate λ in units per hour.
+    charging_time : float
+        Mean service (charging) time in hours.
+    stdev_ct : float
+        Standard deviation of the service time in hours.
+    method : {'allen_cunneen', 'lee_longton', 'lee_longton_old'}
+        Queueing approximation method to use:
+
+        - ``'lee_longton'``: M/G/c approximation (Poisson arrivals).
+          Scales the Erlang-C waiting time by (1 + cv²) / 2.
+        - ``'allen_cunneen'``: GI/G/c approximation (general arrivals).
+          Scales the Erlang-C waiting time by (c_a² + cv²) / 2.
+          Requires ``c_a2``.
+        - ``'lee_longton_old'``: Legacy implementation, retained for
+          comparability only.
+
+    c_a2 : float or None, optional
+        Squared coefficient of variation of interarrival times.
+        Required for ``method='allen_cunneen'``, ignored otherwise.
+        Default is ``None``.
+    output_unit : {'hours_to_minutes', 'hours_to_seconds', 'hours_to_days'} or None, optional
+        Time unit for waiting-time output columns. ``None`` keeps hours.
+        Default is ``'hours_to_minutes'``.
+
+    Unit Handling
+    -------------
+    Each time parameter can be provided in either minutes or hours:
+
+    +---------------------+---------------------+
+    | Minutes             | Hours               |
+    +=====================+=====================+
+    | charging_time_min   | charging_time_hours |
+    +---------------------+---------------------+
+    | stdev_ct_min        | stdev_ct_hours      |
+    +---------------------+---------------------+
+    | lambda_target_min   | lambda_target_hours |
+    +---------------------+---------------------+
+
+    Returns
+    -------
+    pd.DataFrame
+        One row per β value with columns
+        ``['beta', 'servers', 'rho', 'lambda', 'wq_mmc', 'wq_mgc' | 'wq_gigc', 'wz/az']``.
+
+    References
+    ----------
+    Halfin, S., Whitt, W. (1981). Heavy-traffic limits for queues with many
+        exponential servers. Operations Research, 29(3), 567–588.
+    Borst, S., Mandelbaum, A., Reiman, M. (2004). Dimensioning large
+        call centers. Operations Research, 52(1), 17–34.
+    """
+    # Validation
+    if method == "allen_cunneen" and c_a2 is None:
+        raise ValueError("c_a2 is required for method='allen_cunneen'.")
+    if method != "allen_cunneen" and c_a2 is not None:
+        warnings.warn("c_a2 is ignored for method != 'allen_cunneen'.", UserWarning)
+
+    mu = 1 / charging_time
+    cv = stdev_ct / charging_time
+    c_a2_val = c_a2 if method == "allen_cunneen" else 1.0
+
+    wq_col = _WQ_COL[method]
+    cols = ["beta", "servers", "rho", "lambda", "wq_mmc", wq_col, "wz/az"]
+
+    records = []
+    for beta in beta_range:
+        c = _qed_servers(lambda_target, mu, beta)
+        rho, wq_mmc, wq_model = _compute_wq_for_lambda(
+            lambda_target, c, mu, charging_time, cv, c_a2_val
+        )
+        records.append(
+            [beta, c, rho, lambda_target, wq_mmc, wq_model, wq_model / charging_time]
+        )
+
+    result = pd.DataFrame(records, columns=cols)
+
+    if output_unit is not None:
+        result = _convert_units_dataframe(
+            result,
+            output={col: output_unit for col in ["wq_mmc", wq_col]},
+        )
+
+    return result
