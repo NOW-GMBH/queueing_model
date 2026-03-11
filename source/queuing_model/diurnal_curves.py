@@ -1,5 +1,5 @@
 """
-This script analyses the the traffic counts of several BAST-Zählstellen
+This script analyses and visualizes the traffic counts of several BAST-Zählstellen
 """
 
 import calendar
@@ -9,7 +9,6 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
 from pathlib import Path
-from io import BytesIO
 
 plt.rcParams["figure.figsize"] = (15, 8)
 plt.style.use("ggplot")
@@ -18,6 +17,13 @@ BASE_URL_hourly = "https://www.bast.de/videos/{year}_{typ}_S.zip"
 
 
 def load_bast_jawe(year: int = 2023, cache_dir: Path = Path(".cache")) -> pd.DataFrame:
+    """
+    Loads the yearly statistics of traffic count data from BASt
+    :param year: year of Dataset
+    :param cache_dir:
+    :return:
+    """
+
     cache_dir.mkdir(exist_ok=True)
     cache_file = cache_dir / f"Jawe{year}.csv"
 
@@ -37,16 +43,46 @@ def load_bast_jawe(year: int = 2023, cache_dir: Path = Path(".cache")) -> pd.Dat
     return pd.read_csv(cache_file, sep=";", encoding="latin-1", low_memory=False)
 
 
-def load_bast_hourly(year: int, strassenklasse: str = "BAB") -> BytesIO:
+def load_bast_hourly(
+    year: int, strassenklasse: str = "BAB", cache_dir: Path = Path(".cache")
+) -> pd.DataFrame:
     """
-    strassenklasse: 'BAB' (Autobahnen) oder 'B' (Bundesstraßen)
+    Loads the hourly statistics of traffic count data from BASt
+    year: year of Dataset
+    strassenklasse: 'BAB' (Autobahnen) or 'B' (Bundesstraßen)
     """
+    cache_dir.mkdir(exist_ok=True)
+    cache_file = cache_dir / f"{year}_{strassenklasse}_S.zip"
+
+    if cache_file.exists():
+        return pd.read_csv(
+            cache_file,
+            compression="zip",
+            sep=";",
+            encoding="latin-1",
+            thousands=".",
+            decimal=",",
+            low_memory=False,
+        )
+
     typ = "A" if strassenklasse == "BAB" else "B"
     url = BASE_URL_hourly.format(year=year, typ=typ)
     print(f"Lade: {url}")
     response = requests.get(url, timeout=120)
     response.raise_for_status()
-    return BytesIO(response.content)
+    response.encoding = "latin-1"
+
+    content = response.content
+    cache_file.write_bytes(content)
+    return pd.read_csv(
+        cache_file,
+        compression="zip",
+        sep=";",
+        encoding="latin-1",
+        thousands=".",
+        decimal=",",
+        low_memory=False,
+    )
 
 
 def parse_date(df):
@@ -82,16 +118,7 @@ def specs(x, **kwargs):
 
 # %%
 
-hourly_data = load_bast_hourly(year=2020)
-bast_hourly = pd.read_csv(
-    hourly_data,
-    compression="zip",
-    sep=";",
-    encoding="latin-1",
-    thousands=".",
-    decimal=",",
-    low_memory=False,
-)
+bast_hourly = load_bast_hourly(year=2020)
 
 # %%
 Zählstelle = [3937, 5090, 9529, 6963, 9028]
