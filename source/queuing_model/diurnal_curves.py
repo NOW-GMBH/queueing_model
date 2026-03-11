@@ -1,12 +1,52 @@
-# %%
+"""
+This script analyses the the traffic counts of several BAST-Zählstellen
+"""
 
+import calendar
+import requests
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
+from pathlib import Path
+from io import BytesIO
 
 plt.rcParams["figure.figsize"] = (15, 8)
 plt.style.use("ggplot")
+
+BASE_URL_hourly = "https://www.bast.de/videos/{year}_{typ}_S.zip"
+
+
+def load_bast_jawe(year: int = 2023, cache_dir: Path = Path(".cache")) -> pd.DataFrame:
+    cache_dir.mkdir(exist_ok=True)
+    cache_file = cache_dir / f"Jawe{year}.csv"
+
+    if cache_file.exists():
+        return pd.read_csv(cache_file, sep=";", encoding="latin-1", low_memory=False)
+
+    url = (
+        f"https://www.bast.de/DE/Themen/Digitales/HF_1/Massnahmen/"
+        f"verkehrszaehlung/Daten/{year}_1/Jawe{year}.csv"
+        "?view=renderTcDataExportCSV"
+    )
+    response = requests.get(url, timeout=30)
+    response.raise_for_status()
+    response.encoding = "latin-1"
+
+    cache_file.write_text(response.text, encoding="latin-1")
+    return pd.read_csv(cache_file, sep=";", encoding="latin-1", low_memory=False)
+
+
+def load_bast_hourly(year: int, strassenklasse: str = "BAB") -> BytesIO:
+    """
+    strassenklasse: 'BAB' (Autobahnen) oder 'B' (Bundesstraßen)
+    """
+    typ = "A" if strassenklasse == "BAB" else "B"
+    url = BASE_URL_hourly.format(year=year, typ=typ)
+    print(f"Lade: {url}")
+    response = requests.get(url, timeout=120)
+    response.raise_for_status()
+    return BytesIO(response.content)
 
 
 def parse_date(df):
@@ -41,9 +81,18 @@ def specs(x, **kwargs):
 # %%
 
 # %%
+
+hourly_data = load_bast_hourly(year=2020)
 bast_hourly = pd.read_csv(
-    "C:/SynologyDrive/D.020.001_BASt_Zaehlstellen/10_Jawe2020/2020_A_S.txt", sep=";"
+    hourly_data,
+    compression="zip",
+    sep=";",
+    encoding="latin-1",
+    thousands=".",
+    decimal=",",
+    low_memory=False,
 )
+
 # %%
 Zählstelle = [3937, 5090, 9529, 6963, 9028]
 Zahlstellen_Name = {
@@ -51,7 +100,7 @@ Zahlstellen_Name = {
     5090: "Düsseldorf-Urdenbach A59 - Typ A",
     9529: "AS Wasserlosen A7 - Typ E",
     6963: "Hochstadt A66 - Typ F",
-    9028: "Felden (O) A8",
+    9028: "Felden (O) A8 - Typ G",
 }
 
 # %%
@@ -70,7 +119,7 @@ tagesganglinie = sns.catplot(
     x="Hour",
     y="PLZ_R2",
     data=selected_bast_hourly[
-        (selected_bast_hourly["Zst"].isin([3937, 5090, 9529, 6963]))
+        (selected_bast_hourly["Zst"].isin(Zählstelle))
         & (selected_bast_hourly["Weekday"].isin([1, 2, 3]))
     ],
     col="Zst_Name",
@@ -78,7 +127,7 @@ tagesganglinie = sns.catplot(
     hue="Weekday",
     kind="point",
     estimator=lambda x: np.percentile(x, 90),
-    ci=None,
+    errorbar=None,
     legend=False,
     height=6,
     aspect=1.3,
@@ -100,42 +149,57 @@ for ax in tagesganglinie.axes:
 plt.show()
 # %%
 # Für Zählstelle mit stark ausgeprägtem Jahresganglinientyp G - Urlaub
+zaehlstelle_g = 9028
+month_order = [calendar.month_name[m] for m in range(1, 13)]
+
+plot_data = selected_bast_hourly[
+    selected_bast_hourly["Zst"].isin([zaehlstelle_g])
+].copy()
+plot_data["Month"] = pd.Categorical(
+    plot_data["Month"].map(lambda m: calendar.month_name[m]),
+    categories=month_order,
+    ordered=True,
+)
 tagesganglinie = sns.catplot(
     x="Hour",
     y="PLZ_R1",
-    data=selected_bast_hourly[(selected_bast_hourly["Zst"].isin([9028]))],
+    data=plot_data,
     hue="Month",
+    hue_order=month_order,
+    palette=sns.color_palette("tab20", n_colors=12),
     kind="point",
     estimator=lambda x: np.percentile(x, 90),
-    ci=None,
-    legend=False,
+    errorbar=None,
+    legend=True,
     height=5,
     aspect=1.3,
 )
 tagesganglinie.set_axis_labels("Stunde", "Anzahl Fahrzeuge (PKW Gruppe) R1")
 # sns.move_legend(tagesganglinie, "center left", bbox_to_anchor=(1.05, 1.05))
-hue_labels = [
-    "Januar",
-    "Februar",
-    "März",
-    "April",
-    "Mai",
-    "Juni",
-    "Juli",
-    "August",
-    "September",
-    "Oktober",
-    "November",
-    "Dezember",
-]
-tagesganglinie.add_legend(
-    legend_data={
-        key: value
-        for key, value in zip(hue_labels, tagesganglinie._legend_data.values())
-    }
+
+tagesganglinie.figure.subplots_adjust(right=0.75)
+
+legend = tagesganglinie.figure.legends[0]
+legend.set_title("Monat")
+legend.set_bbox_to_anchor((0.78, 0.5), transform=tagesganglinie.figure.transFigure)
+
+tagesganglinie.figure.legends.clear()
+
+# Neu auf der Axes platzieren – außerhalb
+ax = tagesganglinie.axes[0][0]
+handles, labels = ax.get_legend_handles_labels()
+
+ax.legend(
+    handles=handles,
+    labels=labels,
+    title="Monat",
+    bbox_to_anchor=(1.02, 1),
+    loc="upper left",
+    borderaxespad=0,
 )
-# plt.tight_layout()
+
 plt.show()
+
 # %%
 for zst in Zählstelle:
 

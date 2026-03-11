@@ -12,6 +12,7 @@ packages = [
 python = "^3.11"
 pandas = "^2.3.3"
 pydantic = "^2.12.5"
+requests = "^2.32.5"
 
 [tool.poetry.group.dev.dependencies]
 matplotlib = "^3.10.8"
