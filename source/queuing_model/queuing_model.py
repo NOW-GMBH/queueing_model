@@ -1061,7 +1061,7 @@ def queue_min_servers_qed(
         # --- QED initial guess ---
         c_qed = _qed_servers(lambda_target, mu, beta)
 
-        search_start = min(min_stable_servers, c_qed - search_radius)
+        search_start = max(1, min(min_stable_servers, c_qed - search_radius))
         search_end = min(max_server, c_qed + search_radius)
 
         # --- Local search around QED (full search, no early break) ---
