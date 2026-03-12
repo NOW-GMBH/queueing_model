@@ -95,14 +95,27 @@ poetry shell
 
 ## Usage
 
-The wrapper functions `queue_max_lambda`, `queue_min_servers`, `queue_min_servers_qed`  accept service time
-and arrival rate parameters in either **minutes** or **hours** via suffixed keyword arguments:
+The functions `queue_max_lambda`, `queue_min_servers`, `queue_min_servers_qed`, `queue_sweep_rho`,
+`queue_sweep_beta`  accept service time and arrival rate parameters in either **minutes** or **hours**
+via suffixed keyword arguments:
 
 | Minutes suffix       | Hours suffix          |
 |----------------------|-----------------------|
 | `charging_time_min`  | `charging_time_hours` |
 | `stdev_ct_min`       | `stdev_ct_hours`      |
 | `lambda_target_min`  | `lambda_target_hours` |
+
+The output unit for waiting times can be controlled via
+the `output_unit` parameter. By default (`output_unit="hours_to_minutes"`), all waiting
+time outputs are converted from internal hours to **minutes**:
+
+| Output field | Default unit|
+|---|---|
+| `wq` | minutes |
+| `lambda` | vehicles / hour |
+| `rho` | dimensionless |
+
+To retrieve raw outputs in **hours**, set `output_unit=None`:
 
 ---
 
