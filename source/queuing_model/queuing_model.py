@@ -957,6 +957,9 @@ def queue_min_servers_qed(
     (high λ / μ), where a full linear search from c = 1 is computationally
     expensive.
 
+    All results are efficiency-driven — β only affects search performance, not the operating regime.
+    For a true QED operating point, use _qed_servers directly.
+
     Parameters
     ----------
     lambda_target : float
