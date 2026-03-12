@@ -948,17 +948,22 @@ def queue_min_servers_qed(
 ) -> tuple:
     """Determine required server counts via QED-guided search for an M/G/c or GI/G/c queue.
 
-    For each target mean waiting time, finds the smallest number of servers that
-    can stably serve ``lambda_target`` and satisfies the waiting-time constraint.
-    The search is initialized using the QED (Halfin–Whitt) square-root staffing
-    rule c ≈ R + β·√R, with R = λ / μ.
+    For each target in ``waiting_times``, finds the smallest ``c`` such that
+    the system is stable and ``Wq(c) ≤ waiting_time``. The result is always
+    **efficiency-driven** — never more servers than strictly necessary.
 
-    Prefer this function over :func:`queue_min_servers` for large systems
-    (high λ / μ), where a full linear search from c = 1 is computationally
-    expensive.
+    The search window is anchored at ``c_qed = ⌈R + β·√R⌉`` with
+    ``R = λ/μ``, but always extended down to the stability bound
+    ``⌈R⌉`` to guarantee the optimal ``c`` is within the window::
 
-    All results are efficiency-driven — β only affects search performance, not the operating regime.
-    For a true QED operating point, use _qed_servers directly.
+        search_start = min(⌈R⌉, c_qed - search_radius)
+        search_end   = min(max_server, c_qed + search_radius)
+
+    ``beta`` shifts the window center but does not affect the result — it is
+    a search performance parameter only. For large ``beta``, the window falls
+    back to a linear scan from ``⌈R⌉``, equivalent to :func:`queue_min_servers`.
+    Effective range for ``beta`` is 0–1. For a true QED operating point use
+    :func:`_qed_servers` directly.
 
     Parameters
     ----------
@@ -984,12 +989,11 @@ def queue_min_servers_qed(
         Required for ``method='allen_cunneen'``, ignored otherwise.
         Default is ``None``.
     beta : float, optional
-        QED quality parameter. ``beta = 0`` corresponds to efficiency-driven
-        staffing; higher values add safety capacity. Default is 1.0.
+        Search window center offset. Affects performance only, not the result.
+        Effective range 0–1. Default ``1.0``.
     search_radius : int or None, optional
-        Search window around the QED initial estimate. Used for computational
-        efficiency only and has no queueing-theoretic interpretation. If
-        ``None``, an automatic radius is derived from the offered load.
+        Half-width of the search window. If ``None``, derived automatically
+        from the offered load via :func:`_auto_search_radius`.
     max_server : int, optional
         Maximum number of servers considered in the search. Default is 1000.
     output_unit : {'hours_to_minutes', 'hours_to_seconds', 'hours_to_days'} or None, optional
@@ -1057,7 +1061,7 @@ def queue_min_servers_qed(
         # --- QED initial guess ---
         c_qed = _qed_servers(lambda_target, mu, beta)
 
-        search_start = max(min_stable_servers, c_qed - search_radius)
+        search_start = min(min_stable_servers, c_qed - search_radius)
         search_end = min(max_server, c_qed + search_radius)
 
         # --- Local search around QED (full search, no early break) ---
