@@ -117,6 +117,7 @@ class TestAgainstReferenceFormula:
             waiting_times_min=[wq_target_min],
             method=method,
             max_server=30,
+            output_unit="hours_to_minutes",
             **extra_kwargs,
         )
         c = result[str(wq_target_min)]
@@ -146,6 +147,7 @@ class TestAgainstReferenceFormula:
             waiting_times_min=[wq_target_min],
             method=method,
             max_server=30,
+            output_unit="hours_to_minutes",
             **extra_kwargs,
         )
         c = result[str(wq_target_min)]
@@ -174,6 +176,7 @@ class TestAgainstReferenceFormula:
             waiting_times_min=[5.0],
             method=method,
             max_server=200,
+            output_unit="hours_to_minutes",
             **extra_kwargs,
         )
         c = result["5.0"]
@@ -203,6 +206,7 @@ class TestAllenCunneen:
             stdev_ct_min=10,
             waiting_times_min=[5.0, 10.0],
             max_server=30,
+            output_unit="hours_to_minutes",
         )
         _, result_ll = queue_min_servers_qed(**common, method="lee_longton")
         _, result_ac = queue_min_servers_qed(**common, method="allen_cunneen", c_a2=1.0)
@@ -222,6 +226,7 @@ class TestAllenCunneen:
             waiting_times_min=[5.0],
             method="allen_cunneen",
             max_server=30,
+            output_unit="hours_to_minutes",
         )
         _, r_low = queue_min_servers_qed(**common, c_a2=0.5)
         _, r_mid = queue_min_servers_qed(**common, c_a2=1.0)
@@ -308,6 +313,7 @@ class TestMonotonicity:
                 waiting_times_min=[5.0],
                 method="lee_longton",
                 max_server=200,
+                output_unit="hours_to_minutes",
             )
             servers.append(result["5.0"])
         assert all(s1 <= s2 for s1, s2 in zip(servers, servers[1:]))
@@ -325,6 +331,7 @@ class TestMonotonicity:
                 method="allen_cunneen",
                 c_a2=1.5,
                 max_server=200,
+                output_unit="hours_to_minutes",
             )
             servers.append(result["5.0"])
         assert all(s1 <= s2 for s1, s2 in zip(servers, servers[1:]))
@@ -340,6 +347,7 @@ class TestMonotonicity:
                 waiting_times_min=targets,
                 method=method,
                 max_server=30,
+                output_unit="hours_to_minutes",
                 **extra,
             )
             servers = [result[str(t)] for t in targets]
@@ -479,6 +487,7 @@ class TestEdgeCases:
             stdev_ct_min=10,
             waiting_times_min=[0.0],
             method="lee_longton",
+            output_unit="hours_to_minutes",
         )
         c = result[1]["0.0"]
         assert c is None or c > 100
@@ -494,6 +503,7 @@ class TestEdgeCases:
                 method=method,
                 beta=2,
                 max_server=1000,
+                output_unit="hours_to_minutes",
                 **extra,
             )
             c = result[1]["5.0"]
@@ -508,6 +518,7 @@ class TestEdgeCases:
                 stdev_ct_min=10,
                 waiting_times_min=[60.0],
                 method=method,
+                output_unit="hours_to_minutes",
                 **extra,
             )
             c = result[1]["60.0"]
@@ -548,7 +559,12 @@ def test_min_servers_consistency_by_method(
     standard_params, method, extra_kwargs, expected_servers
 ):
     """Server counts match fixed reference values for each method and c_a2."""
-    params = {**standard_params, "method": method, **extra_kwargs}
+    params = {
+        **standard_params,
+        "method": method,
+        "output_unit": "hours_to_minutes",
+        **extra_kwargs,
+    }
     lambda_value, server_dict = queue_min_servers_qed(**params)
 
     assert lambda_value > 0

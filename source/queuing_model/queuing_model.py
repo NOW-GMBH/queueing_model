@@ -629,7 +629,7 @@ def queue_max_lambda(
     c_a2: Annotated[float | None, Field(ge=0)] = None,
     output_unit: (
         Literal["hours_to_minutes", "hours_to_seconds", "hours_to_days"] | None
-    ) = "hours_to_minutes",
+    ) = None,
     output_cols: list[str] | None = None,
 ) -> pd.DataFrame:
     """Compute the maximum arrival rate across server counts for an M/G/c | GI/G/c queue.
@@ -757,7 +757,7 @@ def queue_min_servers(
     max_server: Annotated[int, Field(gt=0)] = 1000,
     output_unit: (
         Literal["hours_to_minutes", "hours_to_seconds", "hours_to_days"] | None
-    ) = "hours_to_minutes",
+    ) = None,
 ) -> tuple:
     """Determine the minimum number of servers required to handle a target arrival rate
     under various mean waiting-time constraints.
@@ -944,7 +944,7 @@ def queue_min_servers_qed(
     max_server: Annotated[int, Field(gt=0)] = 1000,
     output_unit: (
         Literal["hours_to_minutes", "hours_to_seconds", "hours_to_days"] | None
-    ) = "hours_to_minutes",
+    ) = None,
 ) -> tuple:
     """Determine required server counts via QED-guided search for an M/G/c or GI/G/c queue.
 
@@ -1116,7 +1116,7 @@ def queue_sweep_rho(
     c_a2: Annotated[float | None, Field(ge=0)] = None,
     output_unit: (
         Literal["hours_to_minutes", "hours_to_seconds", "hours_to_days"] | None
-    ) = "hours_to_minutes",
+    ) = None,
 ) -> pd.DataFrame:
     """Compute waiting times over a range of traffic intensities ρ for a fixed server count.
 
@@ -1222,7 +1222,7 @@ def queue_sweep_beta(
     c_a2: Annotated[float | None, Field(ge=0)] = None,
     output_unit: (
         Literal["hours_to_minutes", "hours_to_seconds", "hours_to_days"] | None
-    ) = "hours_to_minutes",
+    ) = None,
 ) -> pd.DataFrame:
     """Evaluate the effect of QED safety staffing parameter β on server count,
     utilization ρ, and mean waiting time for a fixed target arrival rate λ.
