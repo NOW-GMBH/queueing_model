@@ -117,6 +117,9 @@ time outputs are retrieved in hours:
 
 To retrieve raw outputs in **minutes**, set `output_unit="hours_to_minutes"`
 
+### arrival rate λ
+The arrival rate λ is used in our models generally in 1/hours and refers to the peak hour of arrivals / charging events.
+
 ---
 
 ### M/G/c Queue — Lee-Longton Approximation
