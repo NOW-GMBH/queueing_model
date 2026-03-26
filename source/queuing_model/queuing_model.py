@@ -400,7 +400,7 @@ def _bisect_lambda(
     cv: float,
     c_a2: float,
     roh_start: float,
-    tol_minutes: float,
+    tol_time: float,
     max_iter: int,
 ) -> List[float]:
     """Bisection core shared by queue_mgc_lee_longton and queue_gigc_allen_cunneen.
@@ -423,7 +423,7 @@ def _bisect_lambda(
         Use 1.0 for Lee-Longton (Poisson arrivals).
     roh_start : float
         Initial upper utilization bound ρ₀ (< 1).
-    tol_minutes : float
+    tol_time : float
         Convergence tolerance on the waiting time.
     max_iter : int
         Maximum number of bisection iterations.
@@ -461,7 +461,7 @@ def _bisect_lambda(
         else:
             lambda_max = mid
 
-        if abs(wq_out - mean_waiting_time) < tol_minutes:
+        if abs(wq_out - mean_waiting_time) < tol_time:
             break
         if lambda_max - lambda_low < 1e-12:
             break
@@ -482,7 +482,7 @@ def queue_mgc_lee_longton(
     charging_time: Annotated[float, Field(ge=0)],
     cv: Annotated[float, Field(ge=0)],
     roh_start: Annotated[float, Field(gt=0, lt=1)] = 0.999999,
-    tol_minutes: Annotated[float, Field(gt=0)] = 1e-5,
+    tol_time: Annotated[float, Field(gt=0)] = 1e-5,
     max_iter: Annotated[int, Field(gt=10, lt=1000000)] = 80,
 ) -> List[float]:
     """Numerically stable M/G/c approximation using the approximation by Lee–Longton (1959).
@@ -507,7 +507,7 @@ def queue_mgc_lee_longton(
         Coefficient of variation of service times (standard deviation / mean).
     roh_start : float, optional
         Initial upper utilization bound ρ₀ (< 1). Default is 0.999999.
-    tol_minutes : float, optional
+    tol_time : float, optional
         Convergence tolerance on the waiting time. Default is 1e-5.
     max_iter : int, optional
         Maximum number of bisection iterations. Default is 80.
@@ -536,7 +536,7 @@ def queue_mgc_lee_longton(
         cv,
         c_a2=1.0,
         roh_start=roh_start,
-        tol_minutes=tol_minutes,
+        tol_time=tol_time,
         max_iter=max_iter,
     )
 
@@ -550,7 +550,7 @@ def queue_gigc_allen_cunneen(
     cv: Annotated[float, Field(ge=0)],
     c_a2: Annotated[float, Field(ge=0)],
     roh_start: Annotated[float, Field(gt=0, lt=1)] = 0.999999,
-    tol_minutes: Annotated[float, Field(gt=0)] = 1e-5,
+    tol_time: Annotated[float, Field(gt=0)] = 1e-5,
     max_iter: Annotated[int, Field(gt=10, lt=1000000)] = 80,
 ) -> List[float]:
     """GI/G/c waiting-time approximation using the Allen-Cunneen formula.
@@ -578,7 +578,7 @@ def queue_gigc_allen_cunneen(
         Squared coefficient of variation of interarrival times.
     roh_start : float, optional
         Initial upper utilization bound ρ₀ (< 1). Default is 0.999999.
-    tol_minutes : float, optional
+    tol_time : float, optional
         Convergence tolerance on the waiting time. Default is 1e-5.
     max_iter : int, optional
         Maximum number of bisection iterations. Default is 80.
@@ -607,7 +607,7 @@ def queue_gigc_allen_cunneen(
         cv,
         c_a2=c_a2,
         roh_start=roh_start,
-        tol_minutes=tol_minutes,
+        tol_time=tol_time,
         max_iter=max_iter,
     )
 
@@ -936,7 +936,7 @@ def queue_min_servers_qed(
     lambda_target: Annotated[float, Field(gt=0)],
     charging_time: Annotated[float, Field(gt=0)],
     stdev_ct: Annotated[float, Field(ge=0)],
-    waiting_times: list[Annotated[float, Field(ge=0)]],
+    waiting_times: list[Annotated[float, Field(gt=0)]],
     method: Literal["allen_cunneen", "lee_longton", "lee_longton_old"],
     c_a2: Annotated[float | None, Field(ge=0)] = None,
     beta: Annotated[float, Field(ge=0)] = 1.0,

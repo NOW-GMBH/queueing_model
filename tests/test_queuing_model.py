@@ -6,6 +6,7 @@ from queuing_model.queuing_model import (
     _compute_wq_for_lambda,
     _erlang_c_prob_wait,
     queue_max_lambda,
+    queue_min_servers,
     queue_min_servers_qed,
     server_utilization,
     _qed_servers,
@@ -82,42 +83,75 @@ class TestCoreFunctions:
 # ─────────────────────────────────────────────────────────────────────────────
 # Reference formula verification — both methods
 # ─────────────────────────────────────────────────────────────────────────────
+class _QueueMinServersBase:
+    """..."""
 
+    CHARGING_TIME_MIN = 45.0
+    STDEV_CT_MIN = 10.0
+    MU = 60 / CHARGING_TIME_MIN
+    CV = STDEV_CT_MIN / CHARGING_TIME_MIN
+    MAX_SERVER = 30
+    OUTPUT_UNIT = "hours_to_minutes"
 
-class TestAgainstReferenceFormula:
-    """Verify library results against an independent reference implementation.
+    _fn = None  # override in subclass
 
-    The reference formulas in conftest.py are pure-math implementations with
-    no dependency on the library under test, ensuring that errors in the
-    library are detectable.
-    """
+    def _result(self, **kwargs) -> dict:
+        defaults = dict(
+            charging_time_min=self.CHARGING_TIME_MIN,
+            stdev_ct_min=self.STDEV_CT_MIN,
+            max_server=self.MAX_SERVER,
+            output_unit=self.OUTPUT_UNIT,
+        )
+        defaults.update(kwargs)  # kwargs überschreiben Defaults, kein Konflikt
+        _, result = self._fn(**defaults)
+        return result
 
-    MU = 60 / 45
-    CV = 10 / 45
+    # ------------------------------------------------------------------ #
+    # Parametrize sets (shared by both subclasses)                         #
+    # ------------------------------------------------------------------ #
 
-    @pytest.mark.parametrize(
-        "method, extra_kwargs, wq_target_min",
-        [
-            ("lee_longton", {}, 5.0),
-            ("lee_longton", {}, 10.0),
-            ("lee_longton", {}, 60.0),
-            ("allen_cunneen", {"c_a2": 1.0}, 5.0),  # c_a2=1 → identical to Lee-Longton
-            ("allen_cunneen", {"c_a2": 1.5}, 5.0),  # c_a2>1 → more servers expected
-            ("allen_cunneen", {"c_a2": 1.5}, 10.0),
-            ("allen_cunneen", {"c_a2": 0.5}, 5.0),  # c_a2<1 → fewer or equal servers
-        ],
-    )
+    SATISFIES_PARAMS = [
+        ("lee_longton", {}, 5.0),
+        ("lee_longton", {}, 10.0),
+        ("lee_longton", {}, 60.0),
+        ("allen_cunneen", {"c_a2": 1.0}, 5.0),  # c_a2=1 → identical to Lee-Longton
+        ("allen_cunneen", {"c_a2": 1.5}, 5.0),  # c_a2>1 → more servers expected
+        ("allen_cunneen", {"c_a2": 1.5}, 10.0),
+        ("allen_cunneen", {"c_a2": 0.5}, 5.0),  # c_a2<1 → fewer or equal servers
+    ]
+
+    MINIMAL_PARAMS = [
+        ("lee_longton", {}, 5.0),
+        ("lee_longton", {}, 10.0),
+        ("lee_longton", {}, 60.0),
+        ("allen_cunneen", {"c_a2": 1.5}, 5.0),
+        ("allen_cunneen", {"c_a2": 1.5}, 10.0),
+    ]
+
+    MONOTONE_LAMBDA_PARAMS = [
+        (10.0, "lee_longton", {}),
+        (10.0, "allen_cunneen", {"c_a2": 1.5}),
+        (50.0, "allen_cunneen", {"c_a2": 1.0}),
+    ]
+
+    CONSISTENCY_PARAMS = [
+        ("lee_longton", {}, {"5.0": 10, "10.0": 9, "20.0": 9, "60.0": 8}),
+        ("allen_cunneen", {"c_a2": 1.0}, {"5.0": 10, "10.0": 9, "20.0": 9, "60.0": 8}),
+        ("allen_cunneen", {"c_a2": 1.5}, {"5.0": 10, "10.0": 10, "20.0": 9, "60.0": 8}),
+    ]
+
+    # ------------------------------------------------------------------ #
+    # Tests                                                                #
+    # ------------------------------------------------------------------ #
+
+    @pytest.mark.parametrize("method, extra_kwargs, wq_target_min", SATISFIES_PARAMS)
     def test_min_servers_satisfies_wq_target(self, method, extra_kwargs, wq_target_min):
         """Returned server count c satisfies the Wq target per reference formula."""
         c_a2 = extra_kwargs.get("c_a2", 1.0)
-        _, result = queue_min_servers_qed(
+        result = self._result(
             lambda_target=10.0,
-            charging_time_min=45,
-            stdev_ct_min=10,
             waiting_times_min=[wq_target_min],
             method=method,
-            max_server=30,
-            output_unit="hours_to_minutes",
             **extra_kwargs,
         )
         c = result[str(wq_target_min)]
@@ -128,26 +162,14 @@ class TestAgainstReferenceFormula:
             f"Wq={wq_target_min} min (ref: {wq_h * 60:.2f} min)"
         )
 
-    @pytest.mark.parametrize(
-        "method, extra_kwargs, wq_target_min",
-        [
-            ("lee_longton", {}, 5.0),
-            ("lee_longton", {}, 60.0),
-            ("allen_cunneen", {"c_a2": 1.5}, 5.0),
-            ("allen_cunneen", {"c_a2": 1.5}, 10.0),
-        ],
-    )
+    @pytest.mark.parametrize("method, extra_kwargs, wq_target_min", MINIMAL_PARAMS)
     def test_min_servers_is_minimal(self, method, extra_kwargs, wq_target_min):
         """c is minimal: c-1 does NOT satisfy the Wq target per reference formula."""
         c_a2 = extra_kwargs.get("c_a2", 1.0)
-        _, result = queue_min_servers_qed(
+        result = self._result(
             lambda_target=10.0,
-            charging_time_min=45,
-            stdev_ct_min=10,
             waiting_times_min=[wq_target_min],
             method=method,
-            max_server=30,
-            output_unit="hours_to_minutes",
             **extra_kwargs,
         )
         c = result[str(wq_target_min)]
@@ -159,17 +181,89 @@ class TestAgainstReferenceFormula:
             f"(ref: {wq_h * 60:.2f} min)"
         )
 
-    @pytest.mark.parametrize(
-        "lambda_, method, extra_kwargs",
-        [
-            (10.0, "lee_longton", {}),
-            (10.0, "allen_cunneen", {"c_a2": 1.5}),
-            (50.0, "allen_cunneen", {"c_a2": 1.0}),
-        ],
-    )
+    @pytest.mark.parametrize("method, extra_kwargs, wq_target_min", SATISFIES_PARAMS)
+    def test_min_servers_monotone_in_wq_target(
+        self, method, extra_kwargs, wq_target_min
+    ):
+        """c is non-increasing as Wq target grows: a looser SLA needs fewer or equal servers."""
+        targets = [5.0, 10.0, 30.0, 60.0]
+        result = self._result(
+            lambda_target=10.0,
+            waiting_times_min=targets,
+            method=method,
+            max_server=50,
+            **extra_kwargs,
+        )
+        counts = [result[str(t)] for t in targets]
+        for i in range(len(counts) - 1):
+            assert counts[i] >= counts[i + 1], (
+                f"[{method}] c({targets[i]} min)={counts[i]} < "
+                f"c({targets[i + 1]} min)={counts[i + 1]}: "
+                "server count should be non-increasing for looser Wq targets"
+            )
+
+    @pytest.mark.parametrize("lambda_, method, extra_kwargs", MONOTONE_LAMBDA_PARAMS)
+    def test_min_servers_monotone_in_lambda(self, lambda_, method, extra_kwargs):
+        """c is non-decreasing as arrival rate grows: higher load needs more or equal servers."""
+        lambdas = [5.0, 10.0, 20.0, 50.0]
+        counts = [
+            self._result(
+                lambda_target=lam,
+                waiting_times_min=[10.0],
+                method=method,
+                max_server=100,
+                **extra_kwargs,
+            )[str(10.0)]
+            for lam in lambdas
+        ]
+        for i in range(len(counts) - 1):
+            assert counts[i] <= counts[i + 1], (
+                f"[{method}] c(λ={lambdas[i]})={counts[i]} > "
+                f"c(λ={lambdas[i + 1]})={counts[i + 1]}: "
+                "server count should be non-decreasing for higher arrival rates"
+            )
+
+    @pytest.mark.parametrize("wq_target_min", [5.0, 10.0, 30.0])
+    def test_allen_cunneen_vs_lee_longton_at_c_a2_1(self, wq_target_min):
+        """Allen-Cunneen with c_a2=1 must return same c as Lee-Longton (Poisson arrivals)."""
+        c_ll = self._result(
+            lambda_target=10.0, waiting_times_min=[wq_target_min], method="lee_longton"
+        )[str(wq_target_min)]
+        c_ac = self._result(
+            lambda_target=10.0,
+            waiting_times_min=[wq_target_min],
+            method="allen_cunneen",
+            c_a2=1.0,
+        )[str(wq_target_min)]
+        assert c_ll == c_ac, (
+            f"Wq={wq_target_min} min: Lee-Longton c={c_ll} "
+            f"≠ Allen-Cunneen (c_a2=1) c={c_ac}"
+        )
+
+    @pytest.mark.parametrize("wq_target_min", [5.0, 10.0])
+    def test_higher_c_a2_needs_more_or_equal_servers(self, wq_target_min):
+        """Higher arrival variability (c_a2>1) requires more or equal servers than c_a2<1."""
+        c_low = self._result(
+            lambda_target=10.0,
+            waiting_times_min=[wq_target_min],
+            method="allen_cunneen",
+            c_a2=0.5,
+        )[str(wq_target_min)]
+        c_high = self._result(
+            lambda_target=10.0,
+            waiting_times_min=[wq_target_min],
+            method="allen_cunneen",
+            c_a2=1.5,
+        )[str(wq_target_min)]
+        assert c_high >= c_low, (
+            f"Wq={wq_target_min} min: c_a2=1.5 → c={c_high} < c_a2=0.5 → c={c_low}: "
+            "higher arrival variability should require more or equal servers"
+        )
+
+    @pytest.mark.parametrize("lambda_, method, extra_kwargs", MONOTONE_LAMBDA_PARAMS)
     def test_min_servers_above_stability_bound(self, lambda_, method, extra_kwargs):
         """Returned c >= ceil(λ/μ) — absolute stability lower bound."""
-        _, result = queue_min_servers_qed(
+        result = self._result(
             lambda_target=lambda_,
             charging_time_min=45,
             stdev_ct_min=10,
@@ -186,6 +280,95 @@ class TestAgainstReferenceFormula:
             f"{stability_lower_bound(lambda_, self.MU)} for λ={lambda_}"
         )
 
+    @pytest.mark.parametrize(
+        "method, extra_kwargs, expected_servers", CONSISTENCY_PARAMS
+    )
+    def test_min_servers_consistency_fixed_reference(
+        self, method, extra_kwargs, expected_servers
+    ):
+        """Server counts match fixed reference values — regression guard."""
+        result = self._result(
+            lambda_target=10.0,
+            waiting_times_min=[5.0, 10.0, 20.0, 60.0],
+            method=method,
+            **extra_kwargs,
+        )
+        for wq_str, expected_c in expected_servers.items():
+            assert result.get(wq_str) == expected_c, (
+                f"[{method}, c_a2={extra_kwargs.get('c_a2', '—')}] "
+                f"Wq={wq_str}: expected c={expected_c}, got c={result.get(wq_str)}"
+            )
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # Edge cases
+    # ─────────────────────────────────────────────────────────────────────────────
+    @pytest.mark.parametrize(
+        "method, extra_kwargs",
+        [
+            ("lee_longton", {}),
+            ("allen_cunneen", {"c_a2": 1.5}),
+        ],
+    )
+    def test_zero_wq_target_returns_none_or_very_large(self, method, extra_kwargs):
+        """Wq=0 is unachievable: result is None or an implausibly large server count."""
+        with pytest.raises((ValidationError, ValueError)):
+            self._result(
+                lambda_target=10.0,
+                waiting_times_min=[0.0001],
+                method=method,
+                **extra_kwargs,
+            )
+
+    @pytest.mark.parametrize(
+        "method, extra_kwargs",
+        [
+            ("lee_longton", {}),
+            ("allen_cunneen", {"c_a2": 1.5}),
+        ],
+    )
+    def test_large_system_feasible(self, method, extra_kwargs):
+        """λ=1000: feasible solution exists and stays within max_server."""
+        result = self._result(
+            lambda_target=1000.0,
+            waiting_times_min=[5.0],
+            method=method,
+            max_server=1000,
+            **extra_kwargs,
+        )
+        c = result.get("5.0")
+        assert c is not None and c < 1000, f"[{method}] c={c}"
+
+    @pytest.mark.parametrize(
+        "method, extra_kwargs",
+        [
+            ("lee_longton", {}),
+            ("allen_cunneen", {"c_a2": 1.0}),
+        ],
+    )
+    def test_very_low_lambda_feasible(self, method, extra_kwargs):
+        """λ=0.1: trivially solvable with a single server."""
+        result = self._result(
+            lambda_target=0.1,
+            waiting_times_min=[60.0],
+            method=method,
+            **extra_kwargs,
+        )
+        c = result.get("60.0")
+        assert c is not None and c >= 1, f"[{method}] c={c}"
+
+
+# ------------------------------------------------------------------ #
+# Concrete subclasses                                                  #
+# ------------------------------------------------------------------ #
+
+
+class TestQueueMinServersAgainstReferenceFormula(_QueueMinServersBase):
+    _fn = staticmethod(queue_min_servers)
+
+
+class TestQueueMinServersQedAgainstReferenceFormula(_QueueMinServersBase):
+    _fn = staticmethod(queue_min_servers_qed)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Allen-Cunneen specific tests
@@ -197,68 +380,6 @@ class TestAllenCunneen:
 
     MU = 60 / 45
     CV = 10 / 45
-
-    def test_allen_cunneen_equals_lee_longton_when_ca2_is_one(self):
-        """Allen-Cunneen with c_a2=1 (Poisson arrivals) is identical to Lee-Longton."""
-        common = dict(
-            lambda_target=10.0,
-            charging_time_min=45,
-            stdev_ct_min=10,
-            waiting_times_min=[5.0, 10.0],
-            max_server=30,
-            output_unit="hours_to_minutes",
-        )
-        _, result_ll = queue_min_servers_qed(**common, method="lee_longton")
-        _, result_ac = queue_min_servers_qed(**common, method="allen_cunneen", c_a2=1.0)
-
-        for wq_str in ["5.0", "10.0"]:
-            assert result_ll[wq_str] == result_ac[wq_str], (
-                f"Wq={wq_str}: lee_longton={result_ll[wq_str]}, "
-                f"allen_cunneen(c_a2=1)={result_ac[wq_str]}"
-            )
-
-    def test_higher_ca2_requires_more_or_equal_servers(self):
-        """Higher c_a2 (more arrival variability) requires more or equal servers."""
-        common = dict(
-            lambda_target=10.0,
-            charging_time_min=45,
-            stdev_ct_min=10,
-            waiting_times_min=[5.0],
-            method="allen_cunneen",
-            max_server=30,
-            output_unit="hours_to_minutes",
-        )
-        _, r_low = queue_min_servers_qed(**common, c_a2=0.5)
-        _, r_mid = queue_min_servers_qed(**common, c_a2=1.0)
-        _, r_high = queue_min_servers_qed(**common, c_a2=2.0)
-
-        assert r_low["5.0"] <= r_mid["5.0"] <= r_high["5.0"], (
-            f"Monotonicity violated: c(0.5)={r_low['5.0']}, "
-            f"c(1.0)={r_mid['5.0']}, c(2.0)={r_high['5.0']}"
-        )
-
-    def test_allen_cunneen_missing_ca2_raises(self):
-        """Omitting c_a2 for allen_cunneen raises ValidationError or TypeError."""
-        with pytest.raises((ValidationError, ValueError)):
-            queue_min_servers_qed(
-                lambda_target=10,
-                charging_time_min=45,
-                stdev_ct_min=10,
-                waiting_times_min=[5.0],
-                method="allen_cunneen",
-            )
-
-    def test_allen_cunneen_negative_ca2_raises(self):
-        """Negative c_a2 is physically invalid and must raise ValidationError."""
-        with pytest.raises(ValidationError):
-            queue_min_servers_qed(
-                lambda_target=10,
-                charging_time_min=45,
-                stdev_ct_min=10,
-                waiting_times_min=[5.0],
-                method="allen_cunneen",
-                c_a2=-1.0,
-            )
 
     @pytest.mark.parametrize("c_a2", [0.5, 1.0, 1.5, 2.0])
     def test_ref_formula_monotone_in_ca2(self, c_a2):
@@ -300,60 +421,6 @@ class TestMonotonicity:
             for c in range(c_min, c_min + 10)
         ]
         assert all(w1 >= w2 for w1, w2 in zip(wqs, wqs[1:]))
-
-    def test_min_servers_increasing_in_lambda_lee_longton(self):
-        """Higher arrival rate requires more or equal servers (Lee-Longton)."""
-        lambdas = [5.0, 10.0, 20.0, 40.0]
-        servers = []
-        for lam in lambdas:
-            _, result = queue_min_servers_qed(
-                lambda_target=lam,
-                charging_time_min=45,
-                stdev_ct_min=10,
-                waiting_times_min=[5.0],
-                method="lee_longton",
-                max_server=200,
-                output_unit="hours_to_minutes",
-            )
-            servers.append(result["5.0"])
-        assert all(s1 <= s2 for s1, s2 in zip(servers, servers[1:]))
-
-    def test_min_servers_increasing_in_lambda_allen_cunneen(self):
-        """Higher arrival rate requires more or equal servers (Allen-Cunneen)."""
-        lambdas = [5.0, 10.0, 20.0, 40.0]
-        servers = []
-        for lam in lambdas:
-            _, result = queue_min_servers_qed(
-                lambda_target=lam,
-                charging_time_min=45,
-                stdev_ct_min=10,
-                waiting_times_min=[5.0],
-                method="allen_cunneen",
-                c_a2=1.5,
-                max_server=200,
-                output_unit="hours_to_minutes",
-            )
-            servers.append(result["5.0"])
-        assert all(s1 <= s2 for s1, s2 in zip(servers, servers[1:]))
-
-    def test_min_servers_decreasing_in_wq_target(self):
-        """Relaxing the Wq target requires fewer or equal servers (both methods)."""
-        targets = [5.0, 10.0, 20.0, 60.0]
-        for method, extra in [("lee_longton", {}), ("allen_cunneen", {"c_a2": 1.5})]:
-            _, result = queue_min_servers_qed(
-                lambda_target=10.0,
-                charging_time_min=45,
-                stdev_ct_min=10,
-                waiting_times_min=targets,
-                method=method,
-                max_server=30,
-                output_unit="hours_to_minutes",
-                **extra,
-            )
-            servers = [result[str(t)] for t in targets]
-            assert all(
-                s1 >= s2 for s1, s2 in zip(servers, servers[1:])
-            ), f"[{method}] Monotonicity violated: {servers}"
 
     def test_lambda_max_monotone_in_c(self, standard_params):
         """Maximum feasible λ increases monotonically with server count c."""
@@ -470,59 +537,6 @@ class TestConfigValidation:
                 method="allen_cunneen",
                 c_a2=-1.0,
             )
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Edge cases
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-class TestEdgeCases:
-
-    def test_zero_wq_target_returns_none_or_very_large(self):
-        """Wq=0 is unachievable: result is None or an implausibly large server count."""
-        result = queue_min_servers_qed(
-            lambda_target=10,
-            charging_time_min=45,
-            stdev_ct_min=10,
-            waiting_times_min=[0.0],
-            method="lee_longton",
-            output_unit="hours_to_minutes",
-        )
-        c = result[1]["0.0"]
-        assert c is None or c > 100
-
-    def test_large_system_feasible(self):
-        """λ=1000: a feasible solution exists and stays within max_server (both methods)."""
-        for method, extra in [("lee_longton", {}), ("allen_cunneen", {"c_a2": 1.5})]:
-            result = queue_min_servers_qed(
-                lambda_target=1000,
-                charging_time_min=45,
-                stdev_ct_min=10,
-                waiting_times_min=[5.0],
-                method=method,
-                beta=2,
-                max_server=1000,
-                output_unit="hours_to_minutes",
-                **extra,
-            )
-            c = result[1]["5.0"]
-            assert c is not None and c < 1000, f"[{method}] c={c}"
-
-    def test_very_low_lambda_feasible(self):
-        """λ=0.1: trivially solvable with a single server (both methods)."""
-        for method, extra in [("lee_longton", {}), ("allen_cunneen", {"c_a2": 1.0})]:
-            result = queue_min_servers_qed(
-                lambda_target=0.1,
-                charging_time_min=45,
-                stdev_ct_min=10,
-                waiting_times_min=[60.0],
-                method=method,
-                output_unit="hours_to_minutes",
-                **extra,
-            )
-            c = result[1]["60.0"]
-            assert c is not None and c >= 1, f"[{method}] c={c}"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
