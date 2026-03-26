@@ -66,7 +66,7 @@ minimum verified against the Wq target. Users who want an explicit
 capacity buffer beyond the minimum can use `_qed_servers` directly:
 
 ```python
-from queuing_model import _qed_servers
+from queuing_model.queuing_model import _qed_servers
 
 # Returns c_anchor directly — no Wq verification
 c_qed = _qed_servers(lambda_target=100, mu=60/20, beta=1.5)
@@ -106,16 +106,16 @@ via suffixed keyword arguments:
 | `lambda_target_min`  | `lambda_target_hours` |
 
 The output unit for waiting times can be controlled via
-the `output_unit` parameter. By default (`output_unit="hours_to_minutes"`), all waiting
-time outputs are converted from internal hours to **minutes**:
+the `output_unit` parameter. By default (`output_unit=None`), all waiting
+time outputs are retrieved in hours:
 
-| Output field | Default unit|
-|---|---|
-| `wq` | minutes |
+| Output field | Default unit   |
+|---|----------------|
+| `wq` | hour           |
 | `lambda` | vehicles / hour |
-| `rho` | dimensionless |
+| `rho` | dimensionless  |
 
-To retrieve raw outputs in **hours**, set `output_unit=None`:
+To retrieve raw outputs in **minutes**, set `output_unit="hours_to_minutes"`
 
 ---
 
@@ -125,11 +125,11 @@ To retrieve raw outputs in **hours**, set `output_unit=None`:
 fixed number of servers and a mean waiting time target.
 
 ```python
-from queuing_model import queue_mgc_lee_longton
+from queuing_model.queuing_model import queue_mgc_lee_longton
 
 lambda_max, rho, wq_mmc, wq_mgc, wz_az = queue_mgc_lee_longton(
     mean_waiting_time=5.0 / 60,   # Wq target in hours (5 min)
-    servers=10,
+    server=10,
     mu=60 / 45,                   # service rate [1/h], E[S] = 45 min
     charging_time=45 / 60,        # mean service time [h]
     vk=10 / 45,                   # coefficient of variation cv = σ/E[S]
@@ -149,14 +149,14 @@ via the squared coefficient of variation of interarrival times `c_a2`.
 Setting `c_a2=1` recovers the Lee-Longton result.
 
 ```python
-from queuing_model import queue_gigc_allen_cunneen
+from queuing_model.queuing_model import queue_gigc_allen_cunneen
 
 lambda_max, rho, wq_mmc, wq_gigc, wz_az = queue_gigc_allen_cunneen(
     mean_waiting_time=5.0 / 60,   # Wq target in hours
-    servers=12,
+    server=12,
     mu=60 / 45,
     charging_time=45 / 60,
-    vk=10 / 45,
+    cv=10 / 45,
     c_a2=1.5,                     # bursty arrivals (c_a2 > 1)
 )
 
@@ -173,7 +173,7 @@ print(f"Wq (GI/G/c)      : {wq_gigc * 60:.2f} min")
 returns a DataFrame of maximum feasible arrival rates.
 
 ```python
-from queuing_model import queue_max_lambda
+from queuing_model.queuing_model import queue_max_lambda
 
 df = queue_max_lambda(
     charging_time_min=45,
@@ -184,9 +184,10 @@ df = queue_max_lambda(
 )
 
 print(df.head())
-#    servers   lambda       rho
-# 0        8  5.21     0.731
-# 1        9  7.84     0.729
+#   servers    lambda       roh    wq_mmc    wq_mgc     wz/az
+# 1      1.0  0.232991  0.174743  4.999521  4.999521  0.111100
+# 2      2.0  1.114745  0.418029  9.528835  4.999697  0.111104
+# 3      3.0  2.183836  0.545959  9.528436  4.999488  0.111100
 # ...
 ```
 
@@ -198,7 +199,7 @@ print(df.head())
 a given arrival rate within a Wq target using a linear search.
 
 ```python
-from queuing_model import queue_min_servers
+from queuing_model.queuing_model import queue_min_servers
 
 lambda_result, server_dict = queue_min_servers(
     lambda_target=10.0,           # target arrival rate [veh/h]
@@ -206,6 +207,7 @@ lambda_result, server_dict = queue_min_servers(
     stdev_ct_min=10,
     waiting_times_min=[5.0, 10.0, 20.0, 60.0],
     method="lee_longton",
+    output_unit= 'hours_to_minutes'
 )
 
 for wq, c in server_dict.items():
@@ -225,36 +227,28 @@ for wq, c in server_dict.items():
 optimal server count, which is more efficient for large systems.
 
 ```python
-from queuing_model import queue_min_servers_qed
+from queuing_model.queuing_model import queue_min_servers_qed
 
 lambda_result, server_dict = queue_min_servers_qed(
     lambda_target=100.0,          # target arrival rate [veh/h]
     charging_time_min=20,
     stdev_ct_min=30,
     waiting_times_min=[5.0, 10.0],
-    method="allen_cunneen",
-    c_a2=1.5,                     # required for allen_cunneen
-    beta=1.0,                     # QED quality parameter
+    method="lee_longton",
+    beta=1.0,                     # Search window center offset. Affects performance only, not the result.
     max_server=500,
+    output_unit='hours_to_minutes'
 )
 
 for wq, c in server_dict.items():
     print(f"Wq ≤ {wq} min → {c} servers required")
 ```
 
-#### Choosing `beta`
-
-| `beta` | Effect |
-|--------|--------|
-| `0.0`  | Stability bound only — ρ < 1, no Wq guarantee |
-| `0.5`  | Tight estimate, good for low cv |
-| `1.0`  | Default — reliable for most parameter combinations |
-| `2.0`  | Conservative — recommended for large systems or high cv |
-
 > **Note:** For Allen-Cunneen, `c_a2` is required. Omitting it raises a
 > `ValidationError`. Setting `c_a2=1.0` reproduces the Lee-Longton result.
 
-**Optional — Sensitivity Analysis:** Two sweep functions are provided to
+### Optional — Sensitivity Analysis:
+Two sweep functions are provided to
 analyse system behaviour across a range of parameters:
 
 `queue_sweep_rho` computes Wq for a fixed server count and arrival rate
@@ -263,7 +257,7 @@ how sensitive the waiting time is to changes in load — for example to
 identify the utilization threshold beyond which Wq deteriorates rapidly.
 
 ```python
-from queuing_model import queue_sweep_rho
+from queuing_model.queuing_model import queue_sweep_rho
 
 df = queue_sweep_rho(
     servers=10,
@@ -272,6 +266,13 @@ df = queue_sweep_rho(
     rho_range=[0.5, 0.6, 0.7, 0.8, 0.9],
     method="lee_longton",
 )
+
+print(df.head())
+
+#   rho     lambda  servers    wq_mmc    wq_mgc     wz/az
+# 0  0.5   6.666667       10  0.005416  0.002842  0.003789
+# 1  0.6   8.000000       10  0.018994  0.009966  0.013288
+# 2  0.7   9.333333       10  0.055433  0.029085  0.038780
 ```
 
 `queue_sweep_beta` sweeps over a range of β values and returns the
@@ -279,7 +280,7 @@ corresponding server counts and utilization levels for a fixed arrival rate
 and Wq target.
 
 ```python
-from queuing_model import queue_sweep_beta
+from queuing_model.queuing_model import queue_sweep_beta
 
 df = queue_sweep_beta(
     lambda_target=100,
@@ -288,12 +289,22 @@ df = queue_sweep_beta(
     beta_range=[0.0, 0.5, 1.0, 1.5, 2.0],
     method="lee_longton",
 )
+
+print(df.head())
+
+#   beta  servers       rho  lambda    wq_mmc    wq_mgc     wz/az
+# 0   0.0       34  0.980392   100.0  0.434305  0.705746  2.117238
+# 1   0.5       37  0.900901   100.0  0.039255  0.063790  0.191370
+# 2   1.0       40  0.833333   100.0  0.009537  0.015497  0.046492
+# 3   1.5       42  0.793651   100.0  0.003957  0.006429  0.019288
+# 4   2.0       45  0.740741   100.0  0.001035  0.001682  0.005047
+
 ```
 
 Both functions return a `DataFrame` and are intended for exploratory
 analysis and parameter tuning rather than production use.
 
-#### References:
+### References:
 
 Allen, A. O. (1978). Probability, Statistics, and Queueing Theory.
         Academic Press.
