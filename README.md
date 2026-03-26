@@ -130,13 +130,8 @@ fixed number of servers and a mean waiting time target.
 ```python
 from queuing_model.queuing_model import queue_mgc_lee_longton
 
-lambda_max, rho, wq_mmc, wq_mgc, wz_az = queue_mgc_lee_longton(
-    mean_waiting_time=5.0 / 60,   # Wq target in hours (5 min)
-    server=10,
-    mu=60 / 45,                   # service rate [1/h], E[S] = 45 min
-    charging_time=45 / 60,        # mean service time [h]
-    vk=10 / 45,                   # coefficient of variation cv = σ/E[S]
-)
+lambda_max, rho, wq_mmc, wq_mgc, wz_az = queue_mgc_lee_longton(mean_waiting_time=5.0 / 60, server=10, mu=60 / 45,
+                                                               charging_time=45 / 60, cv=10/45)
 
 print(f"Max arrival rate : {lambda_max:.2f} veh/h")
 print(f"Utilization      : {rho:.3f}")
@@ -154,14 +149,8 @@ Setting `c_a2=1` recovers the Lee-Longton result.
 ```python
 from queuing_model.queuing_model import queue_gigc_allen_cunneen
 
-lambda_max, rho, wq_mmc, wq_gigc, wz_az = queue_gigc_allen_cunneen(
-    mean_waiting_time=5.0 / 60,   # Wq target in hours
-    server=12,
-    mu=60 / 45,
-    charging_time=45 / 60,
-    cv=10 / 45,
-    c_a2=1.5,                     # bursty arrivals (c_a2 > 1)
-)
+lambda_max, rho, wq_mmc, wq_gigc, wz_az = queue_gigc_allen_cunneen(mean_waiting_time=5.0 / 60, server=12, mu=60 / 45,
+                                                                   charging_time=45 / 60, cv=10 / 45, c_a2=1.5)
 
 print(f"Max arrival rate : {lambda_max:.2f} veh/h")
 print(f"Utilization      : {rho:.3f}")
