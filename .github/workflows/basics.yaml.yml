@@ -1,0 +1,36 @@
+name: Python Poetry CI
+
+on:
+  push:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install Poetry
+        run: |
+          curl -sSL https://install.python-poetry.org | POETRY_VERSION=1.8.4 python3 -
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'  # Specify the Python version you want to use
+          cache: 'poetry' # caching poetry dependencies
+
+      - name: Install dependencies
+        run: poetry install --without dev --with test
+
+      # Update output format to enable automatic inline annotations.
+      - name: Run Ruff
+        run: poetry run ruff check --output-format=github .
+
+      - name: Run tests
+        run: poetry run pytest  # Replace with your test command if different
