@@ -323,5 +323,12 @@ Borst, S., Mandelbaum, A., Reiman, M. (2004). Dimensioning large
         call centers. Operations Research, 52(1), 17–34.
 
 Gans, N., Koole, G., Mandelbaum, A. (2003). Telephone call centers: Tutorial, review, and research prospects.
+
+
+### Gewährleistung
+
+Der bereitgestellte Code erfolgt ohne Gewähr für Richtigkeit, Vollständigkeit und Aktualität. Die Nutzung erfolgt auf eigene Gefahr.
+Eine Haftung für Schäden ist – soweit gesetzlich zulässig – ausgeschlossen. Hiervon unberührt bleibt die Haftung bei Vorsatz, grober Fahrlässigkeit sowie bei Verletzung von Leben, Körper oder Gesundheit.
+ 
         Manufacturing & Service Operations Management, 5(2), 79–141.
         https://doi.org/10.1287/msom.5.2.79.16071
