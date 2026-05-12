@@ -1,8 +1,8 @@
-# Queuing Model (Team Planen)
+# Queueing Model (Team Planen)
 > Authors: Matthias Friebel
 
 ## About
-The queuing model determines the number of charging points required to handle a given arrival rate of charging events
+The queueing model determines the number of charging points required to handle a given arrival rate of charging events
 per hour at a specific location during peak hours. It is based on a mathematical queueing model and can be applied
 across different demand scenarios.
 
@@ -66,7 +66,7 @@ minimum verified against the Wq target. Users who want an explicit
 capacity buffer beyond the minimum can use `_qed_servers` directly:
 
 ```python
-from queuing_model.queuing_model import _qed_servers
+from queueing_model.queueing_model import _qed_servers
 
 # Returns c_anchor directly — no Wq verification
 c_qed = _qed_servers(lambda_target=100, mu=60/20, beta=1.5)
@@ -81,8 +81,8 @@ This project uses [Poetry](https://python-poetry.org/) for dependency management
 curl -sSL https://install.python-poetry.org | python3 -
 
 # Clone the repository
-git clone https://github.com/NOW-GMBH/planen_queuing_model.git
-cd queuing-model
+git clone https://github.com/NOW-GMBH/queueing_model.git
+cd queueing-model
 
 # Install dependencies
 poetry install
@@ -128,7 +128,7 @@ The arrival rate λ is used in our models generally in 1/hours and refers to the
 fixed number of servers and a mean waiting time target.
 
 ```python
-from queuing_model.queuing_model import queue_mgc_lee_longton
+from queueing_model.queueing_model import queue_mgc_lee_longton
 
 lambda_max, rho, wq_mmc, wq_mgc, wz_az = queue_mgc_lee_longton(mean_waiting_time=5.0 / 60, server=10, mu=60 / 45,
                                                                charging_time=45 / 60, cv=10/45)
@@ -147,7 +147,7 @@ via the squared coefficient of variation of interarrival times `c_a2`.
 Setting `c_a2=1` recovers the Lee-Longton result.
 
 ```python
-from queuing_model.queuing_model import queue_gigc_allen_cunneen
+from queueing_model.queueing_model import queue_gigc_allen_cunneen
 
 lambda_max, rho, wq_mmc, wq_gigc, wz_az = queue_gigc_allen_cunneen(mean_waiting_time=5.0 / 60, server=12, mu=60 / 45,
                                                                    charging_time=45 / 60, cv=10 / 45, c_a2=1.5)
@@ -165,7 +165,7 @@ print(f"Wq (GI/G/c)      : {wq_gigc * 60:.2f} min")
 returns a DataFrame of maximum feasible arrival rates.
 
 ```python
-from queuing_model.queuing_model import queue_max_lambda
+from queueing_model.queueing_model import queue_max_lambda
 
 df = queue_max_lambda(
     charging_time_min=45,
@@ -191,7 +191,7 @@ print(df.head())
 a given arrival rate within a Wq target using a linear search.
 
 ```python
-from queuing_model.queuing_model import queue_min_servers
+from queueing_model.queueing_model import queue_min_servers
 
 lambda_result, server_dict = queue_min_servers(
     lambda_target=10.0,           # target arrival rate [veh/h]
@@ -219,7 +219,7 @@ for wq, c in server_dict.items():
 optimal server count, which is more efficient for large systems.
 
 ```python
-from queuing_model.queuing_model import queue_min_servers_qed
+from queueing_model.queueing_model import queue_min_servers_qed
 
 lambda_result, server_dict = queue_min_servers_qed(
     lambda_target=100.0,          # target arrival rate [veh/h]
@@ -249,7 +249,7 @@ how sensitive the waiting time is to changes in load — for example to
 identify the utilization threshold beyond which Wq deteriorates rapidly.
 
 ```python
-from queuing_model.queuing_model import queue_sweep_rho
+from queueing_model.queueing_model import queue_sweep_rho
 
 df = queue_sweep_rho(
     servers=10,
@@ -272,7 +272,7 @@ corresponding server counts and utilization levels for a fixed arrival rate
 and Wq target.
 
 ```python
-from queuing_model.queuing_model import queue_sweep_beta
+from queueing_model.queueing_model import queue_sweep_beta
 
 df = queue_sweep_beta(
     lambda_target=100,
@@ -323,7 +323,7 @@ Borst, S., Mandelbaum, A., Reiman, M. (2004). Dimensioning large
         call centers. Operations Research, 52(1), 17–34.
 
 Gans, N., Koole, G., Mandelbaum, A. (2003). Telephone call centers: Tutorial, review, and research prospects.
- 
+
 Manufacturing & Service Operations Management, 5(2), 79–141.
    https://doi.org/10.1287/msom.5.2.79.16071
 
@@ -331,4 +331,3 @@ Manufacturing & Service Operations Management, 5(2), 79–141.
 
 Der bereitgestellte Code erfolgt ohne Gewähr für Richtigkeit, Vollständigkeit und Aktualität. Die Nutzung erfolgt auf eigene Gefahr.
 Eine Haftung für Schäden ist – soweit gesetzlich zulässig – ausgeschlossen. Hiervon unberührt bleibt die Haftung bei Vorsatz, grober Fahrlässigkeit sowie bei Verletzung von Leben, Körper oder Gesundheit.
-

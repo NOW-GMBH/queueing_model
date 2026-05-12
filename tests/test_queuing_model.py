@@ -1,7 +1,7 @@
 import math
 import numpy as np
 import pytest
-from queuing_model.queuing_model import (
+from queueing_model.queueing_model import (
     queue_mgc_lee_longton,
     _compute_wq_for_lambda,
     _erlang_c_prob_wait,
